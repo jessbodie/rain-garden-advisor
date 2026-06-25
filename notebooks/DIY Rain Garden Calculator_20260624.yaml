@@ -1,0 +1,2381 @@
+schemaVersion: 3
+meta:
+  sourceVersionId: 019efb1f-8dcf-73b1-89d9-96c7fd8024c8 # DO NOT CHANGE - Hex uses this to match up project versions when reimporting the file
+  description: null
+  projectId: f0ab67e7-2431-42fe-a98c-4805f6071d74 # DO NOT CHANGE - Unique ID of the project from which this file was generated
+  title: DIY Rain Garden Calculator
+  timezone: null
+  appTheme: SYS_PREF
+  codeLanguage: PYTHON
+  status:
+    name: In development
+  categories:
+    - name: Dashboard
+    - name: Product
+  castDecimalsDefault: true
+  hexType: PROJECT
+  allowExecutionReordering: true
+  prerunApp: false
+  autoRerunApp: true
+  cachePublishedAppState: true
+  logicQueryCacheTimeout:
+    type: disabled
+  publishedQueryCacheTimeout: null
+  refreshStalePublishedApp: true
+  kernelImage: null
+  kernelSize: medium
+projectAssets:
+  dataConnections: []
+  envVars: []
+  secrets: []
+sharedAssets:
+  secrets: []
+  vcsPackages: []
+  dataConnections:
+    - dataConnectionId: 78b87430-a82f-4677-9b08-163f12dbab05 # [Demo] Hex Public Data (snowflake)
+    - dataConnectionId: e8480949-7368-449c-b922-66d0c52bbad0 # Supabase (postgres)
+  externalFileIntegrations: []
+cells:
+  - cellType: MARKDOWN
+    cellId: 7470f848-ed1d-4ed4-acab-c0fbccda7565 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Intro
+    config:
+      source: |+
+        ## Overview
+        Due to climate change, flash flooding events are occuring with greater frequency. Aside from the disruption and damage of a flash flood, excess stormwater pollutes the runoff flowing into streets and local waterways. "Runoff picks up fertilizer, oil, pesticides, dirt, bacteria and other pollutants as it makes its way through storm drains and ditches - untreated - to our streams, rivers, lakes and the ocean. Polluted runoff is one of the greatest threats to clean water in the U.S." (EPA.gov)
+
+        Rain gardens act as natural filtration systems by creating a shallow depression where water can collect and slowly seep into the ground. The soil and deep-rooted native plants work together to trap and filter pollutants: first, the basin shape slows down rushing water, allowing sediment to settle; then, as water percolates through the soil, chemical pollutants are captured and broken down by beneficial soil microorganisms; finally, the native plants absorb excess nutrients that would otherwise cause algal blooms in waterways. By capturing and treating stormwater at its source, rain gardens can reduce local flooding while preventing harmful pollutants from reaching our streams, rivers, and lakes.
+
+
+        ### Purpose
+        <!-- * Understand the benefits of rain gardens or "sponges" -->
+        * Learn about precipitation specific to your address
+        * Support planning of a DIY rain garden
+
+
+
+
+
+
+
+  - cellType: CODE
+    cellId: 710a93e4-289a-44fa-aca2-f90f062ed367 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Import Libraries
+    config:
+      source: |
+        import pandas as pd
+        import numpy as np
+        import requests
+        import json
+        import math
+        from geopy.geocoders import Nominatim
+        from IPython.display import HTML, display
+  - cellType: CODE
+    cellId: 570e2fef-1612-446a-b03e-476947f980ef # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Set Constant Variables
+    config:
+      source: |
+        # Open Meteo API initiates historical data 5 days prior to today.
+        # Identify dates for getting prior 2 years data 
+        today = pd.Timestamp.now()
+        date_5_days_ago = today - pd.Timedelta(days=5)
+        NUM_YEARS = 2
+        date_years_ago = date_5_days_ago - pd.Timedelta(days=(365*NUM_YEARS)) 
+
+        DATE_START = date_years_ago.strftime('%Y-%m-%d')
+        DATE_END = date_5_days_ago.strftime('%Y-%m-%d')
+
+        # Assume 99% is the percentile threshold 
+        PERCENTILE_THRESHOLD = .99
+        PERCENTILE_THRESHOLD_EXTREME = .999
+
+        # Assume a rate of .01 inches of precipitation per hour is the minimum threshold 
+        MIN_PRECIP = .01
+  - cellType: MARKDOWN
+    cellId: 8ac87f6b-5610-447a-ad10-18d08facaddb # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break
+    config:
+      source: _____________________________________________
+  - cellType: MARKDOWN
+    cellId: b45140d5-c16d-4af7-981e-64fc022ffd92 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Instruction
+    config:
+      source: "### Input Address"
+  - cellType: INPUT
+    cellId: 2522da88-a7fb-4634-bc59-15f61b4d3f7e # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: "Input an Address:"
+    config:
+      inputType: TEXT_INPUT
+      name: input_address
+      outputType: STRING
+      options: null
+      defaultValue: 97 80th St. Brooklyn NY
+  - cellType: INPUT
+    cellId: 683b36af-06ca-4f4d-9af9-bc7e38e4c220 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Address update
+    config:
+      inputType: BUTTON
+      name: address_update
+      outputType: BOOLEAN
+      options:
+        intent: primary
+        icon: play
+        text: Update
+      defaultValue: null
+  - cellType: CODE
+    cellId: 3a1757f1-8e9c-4e10-9138-11b4dbca23d8 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Convert address to lattitude and longitude values
+    config:
+      source: |-
+        # Helper function to parse the zipcode 
+        def get_zip (address):
+            # Extract zip code from geopy_address
+            address_parts = address.split(', ')
+
+            for part in address_parts:
+                if part.isdigit() and len(part) == 5:  # Assuming US ZIP code format
+                    zip_code = part
+                    break
+            
+            # Warning messages regarding zip codes
+            if not(zip_code):
+                zip_code = None
+                print("U.S. Zip Code not found in the address.")
+
+            return zip_code
+
+
+
+        # Put address lookup and data retreive behind button
+        if address_update:
+            # Convert address to lattitude and longitude values 
+            loc = Nominatim(user_agent="Jess DIY Rain Garden")
+            getLoc = loc.geocode(input_address) 
+            if getLoc:
+                lat = getLoc.latitude
+                lon = getLoc.longitude
+                geopy_address = getLoc.address
+
+                # Save the address data to a file
+                with open('address.json', 'w') as file:
+                    json.dump(geopy_address, file, indent=0)
+
+                zip_code_us = get_zip(geopy_address)
+
+            else:
+                print(f"Error: Please enter a new address and try again.")
+
+            print('Selected location:')
+            print(geopy_address)
+
+
+            # Get historical precipitation data from Open-Meteo
+            time_zone_ET = 'America%2FNew_York' # TODO, set up for UTC/time zones
+            API_URL = f'https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={DATE_START}&end_date={DATE_END}&hourly=precipitation&daily=apparent_temperature_min,precipitation_sum&temperature_unit=fahrenheit&precipitation_unit=inch&timezone={time_zone_ET}'
+
+            # if get_historical_weather_data:
+            response = requests.get(API_URL)
+            if response.status_code == 200:
+                # print(f"{response.status_code}")
+                json_data = response.json()
+                open_meteo_precip_df = pd.DataFrame(json_data)
+                    
+                # Save the JSON data to a file
+                with open('data.json', 'w') as file:
+                    json.dump(json_data, file, indent=4)
+            else:
+                print(f"Error from Open Meteo API: {response.status_code}")
+
+        else: 
+            # Handling for when the location is not refreshed, use saved location and open-meteo data
+            try:
+                # Open-Meteo data
+                with open('data.json', 'r') as file:
+                    json_data = json.load(file)
+                open_meteo_precip_df = pd.DataFrame(json_data)
+
+                # Address from Nominatim
+                with open('address.json', 'r') as address_file:
+                    geopy_address = json.load(address_file)
+
+                zip_code_us = get_zip(geopy_address)    
+
+                print('Using saved location and precipitation data for:')
+                print(geopy_address)
+                print(today)
+            except: 
+                print('Input an address and click the Update button.')
+  - cellType: CODE
+    cellId: 70952782-8502-4f32-ac51-b8d56ab9d861 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Display Chart of Data from Open Meteo
+    config:
+      source: open_meteo_precip_df
+  - cellType: TEXT
+    cellId: c95a1c69-dd73-45a1-af8d-079ea7eb3296 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: null
+    config:
+      richText:
+        - type: paragraph
+          children:
+            - text: _________________________________________________________________
+  - cellType: MARKDOWN
+    cellId: 285adc85-9f2d-470c-a280-908807cbd1b6 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break - PRECIPITATION
+    config:
+      source: "# PRECIPITATION"
+  - cellType: TEXT
+    cellId: f3b156c4-1791-4a3b-ae7c-23481f1d0d81 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: null
+    config:
+      richText:
+        - type: paragraph
+          children:
+            - text: HOURLY ANALYSIS
+  - cellType: CODE
+    cellId: 5835de70-9d9e-4bb5-8384-758c062b0e9c # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Reduce and Flatten Hourly Precipitation Data from Open-Meteo 
+    config:
+      source: |
+        # Reduce and flatten Open-Meteo Hourly Data
+        open_meteo_hourly_df_initial = pd.DataFrame(open_meteo_precip_df['hourly'])
+
+        open_meteo_hourly_df = pd.DataFrame({
+            'time': open_meteo_hourly_df_initial['hourly']['time'],
+            'precipitation': open_meteo_hourly_df_initial['hourly']['precipitation']
+        })
+
+        open_meteo_hourly_df['time'] = pd.to_datetime(open_meteo_hourly_df['time'])
+        open_meteo_hourly_df
+  - cellType: CODE
+    cellId: 452432ee-ccfb-4a15-9c2c-cb51798b56b6 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Sort Hourly Precipitation Data by Percentile
+    config:
+      source: |
+        # Sort the Open-Meteo Hourly Data by Percentile
+        open_meteo_hourly_perc_df = open_meteo_hourly_df.copy()
+        open_meteo_hourly_perc_df = open_meteo_hourly_perc_df.sort_values(by='precipitation')
+        open_meteo_hourly_perc_df['percentile'] = open_meteo_hourly_perc_df['precipitation'].rank(pct=True) * 100
+
+        open_meteo_hourly_perc_df.tail(100)
+  - cellType: CODE
+    cellId: 2faf534b-ab0c-4417-860f-3a10d8e3a6d4 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Calculate Summary Hourly Rate of Precipitation
+    config:
+      source: |
+        # Assign max hourly precipitation rate to extreme max threshold (99.9%)
+        threshold_precip_rate = open_meteo_hourly_perc_df['precipitation'].quantile(PERCENTILE_THRESHOLD_EXTREME)
+
+        # Select precipitation events above the threshold max rate
+        open_meteo_hourly_high_df = open_meteo_hourly_perc_df[open_meteo_hourly_perc_df['precipitation'] >= threshold_precip_rate]
+        # Identify number of precipitation events exceeding threshold
+        num_hourly_high_events = len(open_meteo_hourly_high_df)
+        # Identify maximum rate 
+        hourly_high = open_meteo_hourly_high_df['precipitation'].max()
+
+        # # Filter for daily precipitation events greater than the percentile threshold 
+        # open_meteo_daily_top = open_meteo_hourly_perc_df[open_meteo_hourly_perc_df['percentile'] > (PERCENTILE_THRESHOLD * 100)]
+        # percentile_threshold_hourly = open_meteo_daily_top['precipitation'].min()
+  - cellType: CODE
+    cellId: a393e76d-9d1c-41cd-8b12-317ff56db83b # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Filter Data for Hourly Rate of Precipitation Greater than  Minimum Hourly  Threshold Rate
+    config:
+      source: |
+        # Filter for events with more than minimum precipitation threshold 
+        open_meteo_hourly_nonozero_df = open_meteo_hourly_df.copy()
+        open_meteo_hourly_nonozero_df = open_meteo_hourly_nonozero_df[open_meteo_hourly_nonozero_df['precipitation'] > MIN_PRECIP]
+        open_meteo_hourly_nonozero_df['threshold'] = threshold_precip_rate
+        open_meteo_hourly_nonozero_df
+
+        # Calculate average precipitation per hour, when it is raining
+        avg_precip_per_hour = open_meteo_hourly_nonozero_df['precipitation'].mean()
+
+        # all hourly precip events above minimum precipitation
+        open_meteo_hourly_nonozero_df
+  - cellType: CHARTV2
+    cellId: 91371009-dc18-4262-af89-4330fa0987b2 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Visualization of Hourly Rate of Precipitation
+    config:
+      height: 640
+      chartSpec:
+        type: layered
+        layers:
+          - id: 89d8aa10-f054-473e-9b11-1796eacb0ef5
+            xAxis:
+              type: datetime
+              style:
+                grid:
+                  style: solid
+                ticks: {}
+                labels: {}
+              title: Previous Two Years
+              dataFrameColumn: time
+            series:
+              - id: ffbcf5fd-ee6c-4a78-8f2c-c297d124ce79
+                name: Precipitation
+                type: bar
+                axis:
+                  type: number
+                  style:
+                    grid:
+                      style: solid
+                    ticks: {}
+                    labels: {}
+                  title: Inches of Precipitation  Per Hour
+                dataFrameColumns:
+                  - precipitation
+                colorOrder: ascending
+                color:
+                  type: static
+                opacity:
+                  type: static
+                  value: 1
+                tooltip:
+                  type: auto
+                barWidth: 1
+                orientation: vertical
+                layout: stacked
+              - id: a5f247c4-6f80-406e-bf55-b5803aa73af2
+                name: 99.9th Percentile for Precipitation Rate
+                type: line
+                axis:
+                  type: number
+                  style:
+                    grid:
+                      style: solid
+                    ticks: {}
+                    labels: {}
+                  title: Inches of Precipitation  Per Hour
+                dataFrameColumns:
+                  - threshold
+                colorOrder: ascending
+                color:
+                  type: static
+                  color: "#F58518"
+                opacity:
+                  type: static
+                  value: 0.6
+                tooltip:
+                  type: auto
+                point: false
+                stroke: solid
+                width: 1
+            dataFrame: open_meteo_hourly_nonozero_df
+            seriesGroups:
+              - - ffbcf5fd-ee6c-4a78-8f2c-c297d124ce79
+                - a5f247c4-6f80-406e-bf55-b5803aa73af2
+        settings:
+          legend:
+            position: bottom
+          tooltip: true
+          selectionEnabled: false
+      chartSelection: {}
+      colorMappings: {}
+      resultVariable: chart_result_13
+      outputResult: false
+      displayType: CHART
+      displayTableConfig: null
+  - cellType: CHARTV2
+    cellId: ee40ce67-e43f-41d3-a784-a1ecca5e66d7 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Visualization of Precipitation Events Above Threshold for Hourly Precipitation 
+    config:
+      height: null
+      chartSpec:
+        type: layered
+        layers:
+          - id: 06e86df3-0980-46a3-a28b-87a2d7670251
+            xAxis:
+              type: datetime
+              style:
+                grid:
+                  style: solid
+                ticks: {}
+                labels: {}
+              dataFrameColumn: time
+            series:
+              - id: bc6bb04f-d96b-49b7-ada7-096f6274183b
+                type: bar
+                axis:
+                  type: number
+                  style:
+                    grid:
+                      style: solid
+                    ticks: {}
+                    labels: {}
+                  aggregate: sum
+                dataFrameColumns:
+                  - precipitation
+                colorOrder: ascending
+                color:
+                  type: static
+                opacity:
+                  type: static
+                  value: 1
+                tooltip:
+                  type: auto
+                barWidth: 1
+                orientation: vertical
+                layout: stacked
+            dataFrame: open_meteo_hourly_high_df
+        settings:
+          legend:
+            position: right
+          tooltip: true
+          selectionEnabled: false
+      chartSelection: {}
+      colorMappings: {}
+      resultVariable: chart_result_9
+      outputResult: false
+      displayType: CHART
+      displayTableConfig: null
+  - cellType: TEXT
+    cellId: 6e1f1e21-f5aa-402d-b9e7-b65f92f5b9f3 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: null
+    config:
+      richText:
+        - type: paragraph
+          children:
+            - text: DAILY ANALYSIS
+  - cellType: CODE
+    cellId: 7ca620ff-9ff3-4ac4-96af-11dd6a5d3574 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Reduce and Flatten Daily Precipitation Data from Open-Meteo 
+    config:
+      source: |-
+        # Reduce and flatten Open-Meteo Daily Precipitation Data
+        open_meteo_daily_df_initial = pd.DataFrame(open_meteo_precip_df['daily'])
+
+        open_meteo_daily_df = pd.DataFrame({
+            'time': open_meteo_daily_df_initial['daily']['time'],
+            'precipitation_sum': open_meteo_daily_df_initial['daily']['precipitation_sum']
+        })
+
+        open_meteo_daily_df['time'] = pd.to_datetime(open_meteo_daily_df['time'])
+        open_meteo_daily_df
+
+        # Prepare a data frame with Daily Minimum Apparent Temperature
+        open_meteo_daily_min_temp_df = pd.DataFrame({
+            'time': open_meteo_daily_df_initial['daily']['time'],
+            'apparent_temperature_min': open_meteo_daily_df_initial['daily']['apparent_temperature_min']
+        })
+
+        # Identify the minimum from all Daily Minimums
+        min_apparent_temp = open_meteo_daily_min_temp_df['apparent_temperature_min'].min()
+
+
+        open_meteo_daily_min_temp_df.tail(40)
+  - cellType: CODE
+    cellId: eeb2e356-e682-4cd2-9ccd-9bc3eb7dbc17 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: "Calculate: Total Days with Precipitation, Average Amount Precipitation, Average Number of Days with Precipitation per Year"
+    config:
+      source: |
+        # Average total inches precipiation in a year
+        total_precip_yr = round(open_meteo_daily_df['precipitation_sum'].sum() / NUM_YEARS)
+
+        # Filter for events with more than minimum precipitation (.01") precipitation in a day
+        open_meteo_daily_nonozero_df = open_meteo_daily_df.copy()
+        open_meteo_daily_nonozero_df = open_meteo_daily_nonozero_df[open_meteo_daily_nonozero_df['precipitation_sum'] > MIN_PRECIP]
+
+        # Calculate average precipitation amount, for the days with precipitation
+        avg_amount_daily_precip = open_meteo_daily_nonozero_df['precipitation_sum'].mean()
+
+        # Calculate average number of days with precipitation
+        avg_total_days_w_precip = round(
+            (open_meteo_daily_nonozero_df['precipitation_sum'].count()) / NUM_YEARS)
+
+        # Filter days above average daily precipitation amount
+        days_w_above_avg_precip = open_meteo_daily_nonozero_df[open_meteo_daily_nonozero_df['precipitation_sum'] > avg_amount_daily_precip]
+        # Calculate number of days above average daily precipitation amount
+        avg_num_days_w_above_avg_precip = days_w_above_avg_precip['precipitation_sum'].count() / NUM_YEARS
+  - cellType: CODE
+    cellId: 557b40eb-888f-4556-8dff-aeaed8c355b1 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Identify  Longest Streaks of Consecutive Rainy Days
+    config:
+      source: |
+        # Identify and calculate the number of consecutive days with precipitation
+        daily_precip_df = open_meteo_daily_nonozero_df.copy()
+        daily_precip_df = daily_precip_df.sort_values(by='time').reset_index(drop=True)
+
+        # Create a column that calculates the difference in days between consecutive rows
+        daily_precip_df['day_diff'] = daily_precip_df['time'].diff().dt.days
+        # Create a new column to identify consecutive groups
+        daily_precip_df['consecutive_group'] = (daily_precip_df['day_diff'] != 1).cumsum()
+        # Group by consecutive groups and calculate the number of days in each group
+        consecutive_days = daily_precip_df.groupby('consecutive_group').size()
+
+        # Filter for streaks that are more than 1 day
+        consecutive_streaks = consecutive_days[consecutive_days > 1]
+        # Identify longest streak and filter for longest streaks
+        consecutive_days_max = consecutive_streaks.max()
+        consecutive_streaks_max = consecutive_days[consecutive_days >= consecutive_days_max]
+        num_consecutive_streaks = len(consecutive_streaks_max)
+
+        # Select consecutive streaks that meet max number of consecutive days
+        consecutive_group_ids = (consecutive_streaks_max.index).tolist()
+        consecutive_groups_df = daily_precip_df[daily_precip_df['consecutive_group'].isin(consecutive_group_ids)]
+
+        # Select the first instances of each consecutive group in order to get start dates 
+        consecutive_start_dates_df = consecutive_groups_df.drop_duplicates(subset='consecutive_group', keep='first')
+        consecutive_start_dates = (consecutive_start_dates_df['time']).to_string(index=False)
+
+        print(f'''In the prior two years, there were {num_consecutive_streaks} instances of {consecutive_days_max} consecutive days of precipitation beginning on: 
+        {consecutive_start_dates}''')
+  - cellType: CODE
+    cellId: ac73c630-da51-413f-b961-e675ae253b06 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Sort Daily Precipitation Events by Percentile
+    config:
+      source: |
+        # Sort the Daily Precipitation Events by Percentile
+        open_meteo_daily_perc_df = open_meteo_daily_nonozero_df.copy()
+        open_meteo_daily_perc_df = open_meteo_daily_perc_df.sort_values(by='precipitation_sum')
+        open_meteo_daily_perc_df['percentile'] = open_meteo_daily_perc_df['precipitation_sum'].rank(pct=True) * 100
+
+        max_daily_precip_index = open_meteo_daily_perc_df['precipitation_sum'].idxmax()
+        max_daily_precip_row = open_meteo_daily_perc_df.loc[max_daily_precip_index]
+        max_daily_precip = max_daily_precip_row['precipitation_sum']
+
+        open_meteo_daily_perc_df.tail()
+  - cellType: CODE
+    cellId: 86c7c839-cb3a-4e47-8b2e-eeb58ef5f607 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Identify Daily Threshold and Filter for Above Threshold
+    config:
+      source: |-
+        # Handle for when daily amount is less than max precipitation threshold initiated
+        daily_precip_threshold = open_meteo_daily_perc_df['precipitation_sum'].quantile(PERCENTILE_THRESHOLD)
+
+        # Filter for daily precipitation events greater than the percentile threshold 
+        open_meteo_daily_top = open_meteo_daily_perc_df[open_meteo_daily_perc_df['percentile'] > (PERCENTILE_THRESHOLD * 100)]
+        num_daily_high_events = len(open_meteo_daily_top)
+
+        # Add threshold to df for visualization
+        open_meteo_daily_nonozero_df['threshold'] = daily_precip_threshold
+        open_meteo_daily_nonozero_df
+  - cellType: CHARTV2
+    cellId: 0da82e30-e6cb-48e1-80fe-19760d6f026f # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Visualization of Days with Precipitation
+    config:
+      height: null
+      chartSpec:
+        type: layered
+        layers:
+          - id: 402ff1b4-57a9-4789-a2bc-8a2344f354b6
+            xAxis:
+              type: datetime
+              style:
+                grid:
+                  style: solid
+                ticks: {}
+                labels: {}
+              title: " Previous Two Years"
+              dataFrameColumn: time
+            series:
+              - id: e73268d5-e353-42c3-9e33-955b3bf00c79
+                name: Precipitation
+                type: bar
+                axis:
+                  type: number
+                  style:
+                    grid:
+                      style: solid
+                    ticks: {}
+                    labels: {}
+                  title: Precipitation (inches)
+                  aggregate: sum
+                dataFrameColumns:
+                  - precipitation_sum
+                colorOrder: ascending
+                color:
+                  type: static
+                opacity:
+                  type: static
+                  value: 1
+                tooltip:
+                  type: auto
+                barWidth: 1
+                orientation: vertical
+                layout: stacked
+              - id: f3145b04-ae35-4233-b387-043198ba82a0
+                name: 99th Percentile for Precipitation Events
+                type: line
+                axis:
+                  type: number
+                  style:
+                    grid:
+                      style: solid
+                    ticks: {}
+                    labels: {}
+                  title: Precipitation (inches)
+                  aggregate: sum
+                dataFrameColumns:
+                  - threshold
+                colorOrder: ascending
+                color:
+                  type: static
+                  color: "#F58518"
+                opacity:
+                  type: static
+                  value: 0.6
+                tooltip:
+                  type: auto
+                point: false
+                stroke: solid
+                width: 1
+            dataFrame: open_meteo_daily_nonozero_df
+            seriesGroups:
+              - - e73268d5-e353-42c3-9e33-955b3bf00c79
+                - f3145b04-ae35-4233-b387-043198ba82a0
+        settings:
+          legend:
+            position: bottom
+          tooltip: true
+          selectionEnabled: false
+      chartSelection: {}
+      colorMappings: {}
+      resultVariable: chart_result_12
+      outputResult: false
+      displayType: CHART
+      displayTableConfig: null
+  - cellType: CHARTV2
+    cellId: 51d2d624-9db0-4b4f-b6d3-b92cb9d856a7 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Visualization of Daily Precipitation Events, by Percentile
+    config:
+      height: null
+      chartSpec:
+        type: layered
+        layers:
+          - id: 81f44c15-46fb-46d8-ae87-139c1c7a5bf1
+            xAxis:
+              type: number
+              style:
+                grid:
+                  style: solid
+                ticks: {}
+                labels: {}
+              dataFrameColumn: percentile
+            series:
+              - id: 5d99b250-5651-4bad-b68b-16a8c4b884a1
+                type: line
+                axis:
+                  type: number
+                  style:
+                    grid:
+                      style: solid
+                    ticks: {}
+                    labels: {}
+                dataFrameColumns:
+                  - precipitation_sum
+                colorOrder: ascending
+                color:
+                  type: static
+                opacity:
+                  type: static
+                  value: 1
+                tooltip:
+                  type: auto
+                point: false
+                stroke: solid
+            dataFrame: open_meteo_daily_perc_df
+        settings:
+          legend:
+            position: right
+          tooltip: true
+          selectionEnabled: false
+      chartSelection: {}
+      colorMappings: {}
+      resultVariable: chart_result_11
+      outputResult: false
+      displayType: CHART
+      displayTableConfig: null
+  - cellType: CODE
+    cellId: 27f28d8b-aef9-41f6-9f07-db973e24c311 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Intro
+    config:
+      source: |-
+        print(f'''Analyzing local precipitation patterns is essential for designing an effective rain garden. The following 
+        precipitation data, collected over the past two years, will help determine your rain garden's specifications.
+
+        Location: {geopy_address}''')
+  - cellType: MARKDOWN
+    cellId: 5f659575-8d31-486b-b495-919b10e42462 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break
+    config:
+      source: |+
+        _____________________________________________
+
+  - cellType: MARKDOWN
+    cellId: a5a331f3-25d3-4e05-abbb-9265f0b1eb9c # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Subhead - Daily
+    config:
+      source: "### Daily"
+  - cellType: METRIC
+    cellId: cc551a76-9a68-45ce-a550-817b4e52a26e # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: 99% of Precipitation Events Less than
+    config:
+      title: inches per day
+      valueVariableName: daily_precip_threshold
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 2
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_2
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: METRIC
+    cellId: 788ade94-f13c-4f9f-96d9-dd761f9c5f1c # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Number of Days with >99% Daily Precipitation
+    config:
+      title: days
+      valueVariableName: num_daily_high_events
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: -1
+        abbreviateLargeNumbers: false
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_5
+      comparisonResultVariable: comparison_value_2
+      outputResult: true
+  - cellType: METRIC
+    cellId: 7dd6f499-a983-44f9-a6d5-6cbe93ff12e3 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Maximum Precipitation
+    config:
+      title: inches per day
+      valueVariableName: max_daily_precip
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 2
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: MARKDOWN
+    cellId: ed4a9a03-726a-4351-a8cc-9cf939b1c5d3 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break
+    config:
+      source: |+
+        _____________________________________________
+
+  - cellType: MARKDOWN
+    cellId: e5b4a723-66df-4a8f-a5d0-19deee9bdf57 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Subhead - Hourly
+    config:
+      source: "### Hourly"
+  - cellType: METRIC
+    cellId: 3557268a-32ee-4b26-977f-6648039b08c6 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: 99.9% of Precipitation Events Less than
+    config:
+      title: inches per hour
+      valueVariableName: threshold_precip_rate
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 2
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_6
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: METRIC
+    cellId: 75574f9d-967e-44bc-a0e1-af29a34a192b # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Number of Hours with >99.9% Precipitation Rate
+    config:
+      title: hours
+      valueVariableName: num_hourly_high_events
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: -1
+        abbreviateLargeNumbers: false
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_3
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: METRIC
+    cellId: 269a5558-8ce6-4d53-bb22-9686e3bc0d91 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Maximum Precipitation Rate
+    config:
+      title: inches per hour
+      valueVariableName: hourly_high
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 2
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_3
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: MARKDOWN
+    cellId: 3fcab833-c0cd-495a-a417-0c08c8af8199 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break
+    config:
+      source: |+
+        _____________________________________________
+
+  - cellType: MARKDOWN
+    cellId: d8d6461c-42d2-4b7f-884f-935e9bb9f152 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Subhead - On Average
+    config:
+      source: "### On Average"
+  - cellType: METRIC
+    cellId: 09322015-3fe3-4277-8197-da4b89b09d98 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Average Number of Days with Precipitation
+    config:
+      title: days
+      valueVariableName: avg_total_days_w_precip
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: -1
+        abbreviateLargeNumbers: false
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_6
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: METRIC
+    cellId: bba0ae1d-8c1f-46f9-8f66-3c9d65cbfdb4 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Average Precipitation Rate
+    config:
+      title: inches per hour
+      valueVariableName: avg_precip_per_hour
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 2
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_8
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: METRIC
+    cellId: 55f65f13-f968-4c90-88c9-16f3e65f7a66 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Average Daily Precipitation
+    config:
+      title: inches per day
+      valueVariableName: avg_amount_daily_precip
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 2
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_7
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: METRIC
+    cellId: 6bc36b22-bd7a-4970-9de0-393c262bb409 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Average Total Precipitation
+    config:
+      title: inches per year
+      valueVariableName: total_precip_yr
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: null
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: value_9
+      comparisonResultVariable: comparison_value
+      outputResult: true
+  - cellType: MARKDOWN
+    cellId: b76ad0ec-d0b6-4c76-81f8-b9b440e2ce43 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break
+    config:
+      source: |+
+        _____________________________________________
+
+  - cellType: MARKDOWN
+    cellId: 9b0a34c7-3ecc-4182-b76f-f0e85e326c73 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Subhead - Fun Fact
+    config:
+      source: "### Rainy Day Fact"
+  - cellType: CODE
+    cellId: c6ff075c-631d-48ad-b08b-70244b0cfc9f # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Summarize Consecutive Days with Precipitation
+    config:
+      source: |+
+        # Summarize consecutive days with precipitation 
+        print(f'''In the prior two years, there were {num_consecutive_streaks} instances of {consecutive_days_max} consecutive days of precipitation beginning on: 
+        {consecutive_start_dates}''')
+
+
+  - cellType: MARKDOWN
+    cellId: d9ebf137-9d1a-44fe-a43c-8a11c7fd24bc # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break - RAIN GARDEN
+    config:
+      source: "# RAIN GARDEN"
+  - cellType: CODE
+    cellId: 1edc787f-12f8-4e50-83b9-4b3fc47f7322 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain Garden Size Factors Data - Less than 30 ft
+    config:
+      source: |-
+        # Source for Size Factors based on Soil Type: 
+        # Washington, D.C. Department of Energy & Environment 
+        # Using the Rain Garden Size Factors 
+        # For Rain Gardens less than 30 ft from downspout
+        # https://doee.dc.gov/sites/default/files/dc/sites/ddoe/publication/attachments/RaingardenHow2HomeownerUWExtension.pdf
+        # page 9
+
+        rg_size_factors_csv = 'RainGarden-SizeFactors.csv'
+        rg_size_factors = pd.read_csv(rg_size_factors_csv)
+        rg_size_factors_less_30_df = pd.DataFrame(rg_size_factors)
+        rg_size_factors_less_30_df
+  - cellType: CODE
+    cellId: 2f6b7688-652b-40e8-a8b4-85a416389003 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain Garden Size Factors Data - More than 30 ft
+    config:
+      source: |-
+        # Source for Size Factors based on Soil Type: 
+        # Washington, D.C. Department of Energy & Environment 
+        # Using the Rain Garden Size Factors 
+        # For Rain Gardens more than 30 ft from downspout
+        # https://doee.dc.gov/sites/default/files/dc/sites/ddoe/publication/attachments/RaingardenHow2HomeownerUWExtension.pdf
+        # page 9
+
+        rg_size_factors_more_30_soil = {
+            'Soil Type': ['Sandy', 'Silty', 'Clayey'],
+            'Sizing Factor': [0.03, 0.06, 0.10]
+        }
+
+        rg_size_factors_more_30_soil
+        rg_size_factors_more_30_df = pd.DataFrame(rg_size_factors_more_30_soil)
+        rg_size_factors_more_30_df
+  - cellType: CODE
+    cellId: 6ccbda2e-3841-4f6a-aa1e-77afe273d7b4 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain Garden Size Factors - Simplified and Merged
+    config:
+      source: |-
+        # Merge Sizing Factor Data to one DF
+        # Add Average of 6-8" since depth will be pulled from geometry table 
+        rg_size_factors_soil_df = rg_size_factors_more_30_df.copy()
+        rg_size_factors_soil_df = rg_size_factors_soil_df.rename(columns={'Sizing Factor': 'Sizing Factor (More than 30 ft)'})
+        rg_size_factors_soil_df['Sizing Factor (Less than 30 ft)'] = round(((rg_size_factors_less_30_df['6-7" deep'] + rg_size_factors_less_30_df['8" deep'])/2),2)
+        rg_size_factors_soil_df
+  - cellType: CODE
+    cellId: 8b0115e5-7ee0-477f-8b49-1dbd64c5de34 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain Garden Size Factors - Based on Infiltration Rate
+    config:
+      source: |-
+        # Rain Garden Sizing Factors based on Infiltration Rate 
+        # https://www.5counties.org/docs/lu_planning/04_rain_garden.pdf (page 5)
+
+        rg_size_factors_rate = {
+            'Min Infiltration Rate': [0.5, 1.0, 1.5, 2.0, 6.0, 12],
+            'Max Infiltration Rate': [0.9, 1.4, 1.9, 5.9, 11.9, 18],
+            'Sizing Factor': [0.09, 0.05, 0.04, 0.03, 0.02, 0.01]
+        }
+        rg_size_factors_rate
+        rg_size_factors_rate_df = pd.DataFrame(rg_size_factors_rate)
+        rg_size_factors_rate_df
+  - cellType: CODE
+    cellId: 8e34fbae-c06d-4900-bb92-9317a90edebf # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain Garden Depth Look Up Table (Geometry-based)
+    config:
+      source: |-
+        # Minimum Rain Garden Geometry  
+        # https://www.5counties.org/docs/lu_planning/04_rain_garden.pdf (page 5)
+        rg_dimensions_table = {
+            'Ponding Depth (in)': [6, 7, 8, 9, 10, 11, 12],
+            'Minimum Width (ft)': [3, 3.5, 4, 4.5, 5, 5.5, 6],
+            'Min Area (sq ft)': [9, 12.3, 16, 20.3, 25, 30.3, 36],
+        }
+
+        rg_dimensions_table
+        rg_dimensions_table_df = pd.DataFrame(rg_dimensions_table)
+        rg_dimensions_table_df
+  - cellType: CODE
+    cellId: 5c9cfe26-749e-4130-9723-842e3cfdd03b # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Ingest, Tidy, and Filter USDA Plants Data from CSV
+    config:
+      source: |
+        # Ingest Raw USDA Plants data from CSV
+        raw_plants_data_csv = 'usda-plants 8-1-2023.csv'
+        raw_plants_data = pd.read_csv(raw_plants_data_csv)
+
+        # Filter data to relevant columns and rename
+        select_plants_data = raw_plants_data.copy()
+        select_plants_data = select_plants_data[['Id', 'Symbol','ScientificName','CommonName','characteristics/0/Moisture Use', 'characteristics/0/Drought Tolerance', 
+        'characteristics/0/Temperature, Minimum (°F)',
+        'characteristics/0/Height at 20 Years, Maximum (feet)','characteristics/0/Low Growing Grass','characteristics/0/Shape and Orientation',
+        'characteristics/0/Precipitation, Maximum','characteristics/0/Precipitation, Minimum', 'characteristics/0/Shade Tolerance',
+        'characteristics/0/Bloom Period','characteristics/0/Flower Color','characteristics/0/Flower Conspicuous',
+        'characteristics/0/Adapted to Coarse Textured Soils','characteristics/0/Adapted to Fine Textured Soils','characteristics/0/Adapted to Medium Textured Soils'
+        ]]
+
+        select_plants_data = select_plants_data.rename(columns={'characteristics/0/Moisture Use':'Moisture Use', 'characteristics/0/Drought Tolerance':'Drought Tolerance', 
+        'characteristics/0/Temperature, Minimum (°F)':'Temperature, Minimum (°F)','characteristics/0/Height at 20 Years, Maximum (feet)':'Height at 20 Years (feet)',
+        'characteristics/0/Low Growing Grass':'Low Growing Grass','characteristics/0/Shape and Orientation':'Shape and Orientation',
+        'characteristics/0/Precipitation, Maximum':'Precipitation, Maximum','characteristics/0/Precipitation, Minimum':'Precipitation, Minimum', 
+        'characteristics/0/Shade Tolerance':'Shade Tolerance','characteristics/0/Bloom Period':'Bloom Period','characteristics/0/Flower Color':'Flower Color',
+        'characteristics/0/Flower Conspicuous':'Flower Conspicuous','characteristics/0/Adapted to Coarse Textured Soils':'Coarse Textured Soils',
+        'characteristics/0/Adapted to Fine Textured Soils':'Fine Textured Soils','characteristics/0/Adapted to Medium Textured Soils':'Medium Textured Soils'
+        }) 
+
+        # Filter to show only High and Medium Moisture tolerance
+        select_plants_data = select_plants_data[(select_plants_data['Moisture Use'].isin(['High','Medium']))]
+        # Filter to show only High and Medium Drought tolerance
+        select_plants_data = select_plants_data[(select_plants_data['Drought Tolerance'].isin(['High','Medium']))]
+
+        # Change common name to title case 
+        select_plants_data['CommonName'] = select_plants_data['CommonName'].str.title()
+
+        # Simplify height data to integer
+        select_plants_data['Height at 20 Years (feet)'] = select_plants_data['Height at 20 Years (feet)'].round().astype('Int64')
+
+        # Add in column with URL to USDA for each plant
+        plant_URL_prefix = 'https://plants.usda.gov/plant-profile/'
+        select_plants_data['URL'] = plant_URL_prefix + select_plants_data['Symbol']
+
+        pd.set_option('display.max_colwidth', None)
+        select_plants_data
+  - cellType: CODE
+    cellId: 8ffab3d4-83a3-4e40-938b-93e591722bab # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Instructions
+    config:
+      source: |
+        print(f'''Select from these menus for customized instructions on designing and building a rain garden at the location:
+
+        {geopy_address}
+        ''')
+  - cellType: INPUT
+    cellId: 32d25a0f-6530-4992-9699-c2a80579fb79 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Slope is flat or less than 12%?
+    config:
+      inputType: CHECKBOX
+      name: input_slope
+      outputType: BOOLEAN
+      options:
+        style: checkbox
+        text: Yes
+      defaultValue: true
+  - cellType: INPUT
+    cellId: b9e9b94a-0c1a-4204-8ce0-1a6ef894e81b # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: "Select soil type:"
+    config:
+      inputType: DROPDOWN
+      name: input_soil_type
+      outputType: STRING
+      options:
+        valueOptions:
+          - I'm not sure
+          - Sandy
+          - Silty
+          - Loamy
+          - Clayey
+      defaultValue: I'm not sure
+  - cellType: INPUT
+    cellId: 03c93d46-e397-4171-94ad-c35e586c8821 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: "Drainage rate , if known (inches/hour):"
+    config:
+      inputType: TEXT_INPUT
+      name: input_perc_rate
+      outputType: STRING
+      options:
+        multiline: false
+      defaultValue: ""
+  - cellType: INPUT
+    cellId: adf64772-fb3a-47d5-b13c-22cefd39baab # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: "Sun tolerance:"
+    config:
+      inputType: DROPDOWN
+      name: input_sun
+      outputType: STRING
+      options:
+        valueOptions:
+          - Full sun
+          - Partial sun
+          - Mostly shady
+      defaultValue: Partial sun
+  - cellType: INPUT
+    cellId: d5f4ba8e-640f-46d5-aab6-74af71d2f1a9 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: "Drainage area (sq ft):"
+    config:
+      inputType: NUMERIC_INPUT
+      name: input_catchment_SA
+      outputType: NUMBER
+      options:
+        increment: 1
+      defaultValue: "700"
+  - cellType: INPUT
+    cellId: 5420d07b-7103-4d71-89ca-6527becacb54 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: "Distance from foundation:"
+    config:
+      inputType: DROPDOWN
+      name: input_distance
+      outputType: STRING
+      options:
+        valueOptions:
+          - 10-30 ft
+          - Less than 10 ft
+          - More than 30 ft
+      defaultValue: More than 30 ft
+  - cellType: INPUT
+    cellId: ec0b9187-6428-4313-8f36-4fc1de34614c # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: " "
+    config:
+      inputType: BUTTON
+      name: input_calculate
+      outputType: BOOLEAN
+      options:
+        intent: success
+        icon: play
+        text: Calculate
+      defaultValue: null
+  - cellType: MARKDOWN
+    cellId: e6b36631-79a0-4343-b056-7eb104a13a57 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Section Break
+    config:
+      source: _____________________________________________
+  - cellType: CODE
+    cellId: 30f1e1a1-6712-4c89-a2af-d2fb9e4c7467 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: USDA Hardiness Zone
+    config:
+      source: |-
+        # Get the USDA Hardiness Zone to inform plant selection
+        USDA_API_URL = f'https://usda-plant-hardiness-zones.p.rapidapi.com/zone/{zip_code_us}'
+
+        headers = {
+        	"x-rapidapi-key": "a8bcc5f75dmsh27b9907ff2b7d34p15e560jsn0fbb11bfd05b", # TODO
+        	"x-rapidapi-host": "usda-plant-hardiness-zones.p.rapidapi.com"
+        }
+
+        response = requests.get(USDA_API_URL, headers=headers)
+
+        if response.status_code == 200:
+            if zip_code_us:
+                hardiness_zone = response.json()["zone"]
+                min_temp_range = response.json()["min_temp_range"]
+                # print(response.json())
+                print(f'Your USDA Plant Hardiness Zone is: {hardiness_zone}')
+                print(f'The associated minimum temperature range is: {min_temp_range}°')
+
+        else:
+            print(f"Error from USDA Hardiness Zone API: {response.status_code}")
+  - cellType: CODE
+    cellId: 12799ae2-04d4-4afb-9720-c7e19d7d3960 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Initiate Rain Garden Instructions
+    config:
+      source: |-
+        # Initiate the Rain Garden Instruction Set
+        rg_instructions = []
+  - cellType: CODE
+    cellId: f6e44f47-dd3f-4830-bf0b-49c3de2b5299 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Based on User Inputs, Plants Data, Sizing Factor Data, and Calculations, Prepare Dimensions and Plant Makeup  for a DIY Rain Garden
+    config:
+      source: |+
+        # Prepare the instructions and calculations for designing the rain garden
+
+        # Get the Sizing Factor based on Soil Type
+        def getSoilSizingFactor (soiltype, distance):
+            rg_size_factors_soil_match = rg_size_factors_soil_df[(rg_size_factors_soil_df['Soil Type'] == soiltype)]
+            if not rg_size_factors_soil_match.empty:
+                if distance == 'More than 30 ft':
+                    sizing_factor = rg_size_factors_soil_match['Sizing Factor (More than 30 ft)'].values[0]
+                else:     
+                    sizing_factor = rg_size_factors_soil_match['Sizing Factor (Less than 30 ft)'].values[0]
+            print(f'Soil-based sizing factor: {sizing_factor}')
+            return sizing_factor
+
+        # Get the Sizing Factor based on Drainage Rate
+        def getRateSizingFactor (rate):
+            rg_size_factors_rate_match = rg_size_factors_rate_df[(rg_size_factors_rate_df['Min Infiltration Rate'] <= rate) & (rg_size_factors_rate_df['Max Infiltration Rate'] >= rate)]
+            if not rg_size_factors_rate_match.empty:
+                sizing_factor_rate = rg_size_factors_rate_match['Sizing Factor'].values[0]
+                print(f'Drainage rate-based sizing factor: {sizing_factor_rate}')
+                return sizing_factor_rate
+            else: 
+                return None
+
+        # Get the depth based on rain garden area
+        def getDepth (area):
+            # Calculate the absolute difference between user input and Min Area values
+            rg_dimensions_df = rg_dimensions_table_df.copy() 
+            rg_dimensions_df['Difference in Area'] = (rg_dimensions_df['Min Area (sq ft)'] - area).abs()
+
+            # Find the row with the minimum difference
+            closest_row = rg_dimensions_df.loc[rg_dimensions_df['Difference in Area'].idxmin()]
+
+            # Retrieve the Ponding Depth
+            ponding_depth = closest_row['Ponding Depth (in)']
+            return ponding_depth
+
+        # Convert input percolation rate to acceptable float
+        def getPercRate (perc_input):
+            if perc_input:
+                # Handling for input needs to be string (in Hex) in order to accept decimals
+                numeric_part = ''.join(char for char in perc_input if char.isdigit() or char == '.')
+                perc_rate = float(numeric_part)
+                # Error handling for unlikely percolation rate
+                if perc_rate > 18:
+                    perc_rate = 18
+                return perc_rate
+            else:
+                return None
+
+        # When the Calculate button is pressed:
+        if input_calculate:
+            # Initiate array to hold all instructions for Rain Garden
+            rg_instructions =['First, be sure the planned rain garden location is not in conflict with any underground utilities.']
+
+            if input_distance == 'Less than 10 ft':
+                rg_instructions =np.append(rg_instructions, f'''Rain gardens should be located at least 10 feet from the foundation. Reconsider your planned location.\n''')
+
+            # Check if basic conditions exist for a Rain Garden, add to instructions
+            if input_slope is not True:
+                rg_instructions = np.append(rg_instructions, 'Rain gardens should only be planted in locations where the incline is less than 12%. Look for another location or consider how to regrade the space.\n')
+
+            # Coerce input rate to a float, otherwise use soil type
+            perc_rate = getPercRate(input_perc_rate)
+
+            # If drainage rate not known or valid, use soil type for sizing factor:
+            if perc_rate is None: 
+                # If user inputs Clayey, add instructions since clayey soil needs a drainage rate above 0.5"
+                if input_soil_type == 'Clayey':
+                    soil_type_lookup = 'Clayey'
+                    rg_instructions = np.append(rg_instructions, f'''Since your soil is {input_soil_type}, test that your soil drainage rate is at least 0.5 inches per hour. 
+                    If slower, add soil amendments until reaching this minimum rate.\n''')
+                elif (input_soil_type == 'Sandy'):
+                    soil_type_lookup = 'Sandy'
+                # If soil type is Loamy or Unknown, change to Silty because
+                # No Sizing Factor available, assume mid-range default 
+                elif (input_soil_type == 'Loamy') or (input_soil_type == 'Silty') or (input_soil_type == 'I\'m not sure'):
+                    soil_type_lookup = 'Silty'
+                # Look up the sizing factor based on soil type
+                rg_sizing_factor = getSoilSizingFactor(soil_type_lookup, input_distance)
+
+            # If drainage rate is below .05", a rain garden is not recommended, use soil type
+            elif perc_rate is not None and perc_rate > 0 and perc_rate < 0.5:
+                rg_instructions = np.append(rg_instructions, f'''Since the drainage rate is less than 0.5", a rain garden is not recommended. Consider other locations, or amend the soil to acheive a drainage rate of 0.5" or higher.\n''')
+
+            # Match the drainage rate with values in drainage rate sizing table
+            elif perc_rate >= 0.5: 
+                rg_sizing_factor = getRateSizingFactor(perc_rate)
+                if rg_sizing_factor == None:
+                    perc_rate = None
+                    rg_instructions = np.append(rg_instructions, f'The input Drainage Rate was not understood. A default mid-range value for Silty soil was used for these results.\n')
+                    rg_sizing_factor = getSoilSizingFactor('Silty', input_distance)
+
+         
+
+            # RAIN GARDEN DIMENSIONS 
+            # Rain Garden Area = Catchment Surface Area * Size Factor
+            rg_area = input_catchment_SA * rg_sizing_factor
+            # Washington, D.C. Dept of Energy & Environment recommends the length is twice as long as the width
+            rg_suggested_length = math.sqrt(rg_area / 2) 
+            rg_suggested_width = rg_suggested_length * 2
+            # 5 Counties recommends a more square like shape to maintain the 3:1 slope
+            rg_suggested_lw = math.sqrt(rg_area)
+            # Look up depth based on Rain Garden Geometry Table
+            rg_suggested_depth = getDepth(rg_area)
+
+            if perc_rate:
+               rg_drains_per_hour = round((((input_catchment_SA / rg_area) * threshold_precip_rate) / perc_rate),1)
+
+            # ADD TO INSTRUCTIONS  
+            rg_instructions = np.append(rg_instructions, f'Recommended area: about {round(rg_area)} square feet')
+            rg_instructions = np.append(rg_instructions, f'''Dimensions for an elongated garden: about {round(rg_suggested_width)} feet by {round(rg_suggested_length)} feet<br>
+        The greater dimension should be perpendicular to the predominant water flow.''')
+            rg_instructions = np.append(rg_instructions, f'''Dimensions for a balanced garden: about {round(rg_suggested_lw)} feet by {round(rg_suggested_lw)} feet''')
+            rg_instructions = np.append(rg_instructions, f'''Recommended depth: {round(rg_suggested_depth)} inches''')
+            rg_instructions = np.append(rg_instructions, f'''The slope of the rain garden from the perimeter to the center should be at a ratio of 3 to 1.<br>
+        (The length of the slope would be three times the vertical depth.)''')
+
+            # PLANTS
+            # Assume each rain garden plant should be alloted 1.33 square feet to start
+            rg_plant_width = 1.33
+            rg_plant_area = rg_plant_width * rg_plant_width
+
+            # Calculate How Many Plants for the Interior and Outer (Perimeter) Portions of the Garden
+            rg_interior_area = (rg_suggested_length - rg_plant_width) * (rg_suggested_width - rg_plant_width)
+            rg_plants_num_interior = rg_interior_area / rg_plant_area
+            rg_outer_area = rg_area - rg_interior_area
+            rg_plants_num_outer = rg_outer_area / rg_plant_area
+
+            # Filter plants based on location's minimum temperature
+            plants_data_for_user = select_plants_data.copy()
+            plants_data_for_user = plants_data_for_user[(plants_data_for_user['Temperature, Minimum (°F)'] > min_apparent_temp)]
+            rg_instruc_plants = f'\nThe following plants are suitable for '
+
+            # Filter plants based on user's input of soil type
+            if input_soil_type == 'Clayey':
+                plants_data_for_user = plants_data_for_user[(plants_data_for_user['Fine Textured Soils'] == 'Yes')]
+                rg_instruc_plants += f'{input_soil_type.lower()} soil types, '
+            elif input_soil_type == 'Sandy':
+                plants_data_for_user = plants_data_for_user[(plants_data_for_user['Coarse Textured Soils'] == 'Yes')]
+                rg_instruc_plants += f'{input_soil_type.lower()} soil types, '
+
+            # Filter plants based on user's input of shadiness
+            if input_sun == 'Full sun':
+                plants_data_for_user = plants_data_for_user[(plants_data_for_user['Shade Tolerance'] == 'Intolerant') | (plants_data_for_user['Shade Tolerance'].isnull())]
+            elif input_sun == 'Partial sun':
+                plants_data_for_user = plants_data_for_user[(plants_data_for_user['Shade Tolerance'] == 'Intermediate') | (plants_data_for_user['Shade Tolerance'].isnull())]
+            elif input_sun == 'Mostly shady':
+                plants_data_for_user = plants_data_for_user[(plants_data_for_user['Shade Tolerance'] == 'Tolerant') | (plants_data_for_user['Shade Tolerance'].isnull())]
+
+            rg_instruc_plants += f'{input_sun.lower()}, '
+            rg_instruc_plants += f'and based on your location, a hardiness temperature minimum of {min_apparent_temp} °F.'
+
+
+            # Update List of Plants to Display based on area
+            # If the area of the rain garden is less than 16 ft, do not show plants taller than 20 ft
+            if rg_area <= 16:
+                plants_data_for_user = plants_data_for_user[(plants_data_for_user['Height at 20 Years (feet)'] <= 20) | (plants_data_for_user['Height at 20 Years (feet)'].isnull())]
+
+            # Filter plants for display, for interior and perimeter of rain garden
+            rg_plants_display = plants_data_for_user.copy()
+            rg_plants_display = rg_plants_display[['CommonName','Height at 20 Years (feet)','Bloom Period','Flower Color','Moisture Use','Drought Tolerance','URL']]
+
+            rg_plants_interior = rg_plants_display[(rg_plants_display['Moisture Use'] == 'High')]
+            rg_plants_perimeter = rg_plants_display[(rg_plants_display['Moisture Use'] == 'Medium')]
+
+
+            # Add specific area calculations to instructions
+            rg_instructions = np.append(rg_instructions, f'''From the lists below, choose {round(rg_plants_num_interior)} plants for the center of your rain garden 
+            (about {rg_interior_area:.1f} square feet) and {round(rg_plants_num_outer)} plants for the rain garden perimeter (about {rg_outer_area:.0f} square feet).''')
+            rg_instructions = np.append(rg_instructions, rg_instruc_plants)
+
+            # Prepare Notes, to apppear after list of plants
+            rg_notes = []
+            if {hardiness_zone}:
+                rg_notes = np.append(rg_notes, f'''Verify selected plants are all labelled as compatible with USDA Hardiness Zone {hardiness_zone}''')
+
+            if perc_rate:
+                rg_notes = np.append(rg_notes, f'''A common concern about rain gardens is a potential link with mosquitoes. However, rain gardens are meant to drain, not hold standing water.
+            With the drainage rate of {perc_rate:.2f} inches/hour, in the case of a one-hour 99.9% percentile precipitation event of ({threshold_precip_rate:.2f} inches/hour), 
+            the {round(rg_area)} sq foot rain garden should drain in {rg_drains_per_hour} hrs.''')
+                rg_notes = np.append(rg_notes, f'''The sizing factor for your rain garden is {rg_sizing_factor}.  This is based on the input distance from the foundation ({input_distance}) and 
+                the input percolation rate of {perc_rate:.2f} inches/hour.''')
+            else: 
+                rg_notes = np.append(rg_notes, f'''The sizing factor for your rain garden is {rg_sizing_factor}.  This is based on input distance from the foundation ({input_distance}) and 
+                the {input_soil_type.lower()} soil.''')
+
+            # Formula to calculate potential storm runoff caught per year:
+            # Rain diverted = Catchment Area * total inches of rain/year * 0.004329 
+            # Multiplier for quantity of water in gallons one inch deep in one square foot of space
+            # Move into code block so value doesn't appear without other outputs
+            GALLONS_PER_CUBIC_INCH = 0.004329
+            storm_water_runoff = round((input_catchment_SA * 144) * total_precip_yr * GALLONS_PER_CUBIC_INCH)
+            print(f'''Your rain garden has the potential to divert and filter {storm_water_runoff:,} gallons of storm water each year.''')
+
+        # Handle for rerunning code block without the calculate button  
+        elif len(rg_instructions) > 0:
+            print('Reusing saved instructions from prior inputs.')
+            # Coerce input rate to a float, otherwise use soil type
+            perc_rate = getPercRate(input_perc_rate)
+
+        else:
+            print('Input values and then click the Calculate button.')
+
+
+  - cellType: CODE
+    cellId: 19d073f9-0ae7-4078-be0b-1d98035cf704 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Display Lists of Plants and Corresponding Details
+    config:
+      source: |
+        # Display list of instructions
+        def render_instructions_HTML(instrucs, header):
+            html_content = '<div style="background-color:white; padding:2em">'
+            
+            html_content += f'<h2 style="font-family: sans-serif;color:#333">{header}</h2>'
+            html_content += f'<ul style="padding: 0; margin: 0;">'
+
+            for instruc in instrucs:
+                html_content += f'''
+                <li style="margin-bottom: 15px; display: block; align-items: center; font-family: sans-serif;">
+                <p style="display:block; margin:0em 1em 2em 1.5em; color:#000">{instruc}</p>
+                </li>
+                '''
+            html_content += "</ul></div>"
+
+            return html_content
+
+
+
+        # Display list of plants and associated details
+        def render_plants_HTML (plants_list_df, list_type): 
+
+            html_content = '<div style="background-color:white; padding:2em">'
+            
+            html_content += f'<h2 style="font-family: sans-serif;color:#333">{list_type}</h2>'
+            html_content += f'<ul style="padding: 0; margin: 0;">'
+
+            for _, row in plants_list_df.iterrows():
+                name_display = f'{row["CommonName"]}'
+                description_display = f'{row["Drought Tolerance"]} Drought Tolerance'
+                description_display += f' ~ {row["Bloom Period"]} Bloom Period'
+                if pd.notna(row["Flower Color"]):
+                    description_display += f' ~ {row["Flower Color"]} Flowers'
+                if pd.notna(row["Height at 20 Years (feet)"]) and row["Height at 20 Years (feet)"] > 0:
+                    description_display += f' ~ {row["Height at 20 Years (feet)"]} ft. Height at Maturity'
+
+                html_content += f'''
+                <li style="margin-bottom: 15px; display: block; align-items: center; font-family: sans-serif;">
+                    <a href="{row["URL"]}" target="_blank" style="text-decoration: none">
+                        <p style="font-style:normal;font-weight:bold;color:darkgreen">{name_display}</p>
+                    </a>
+                <p style="display:block; margin:0em 1em 2em 1.5em; font-size: 80%; color:#666">{description_display}</p>
+                </li>
+                '''
+
+            html_content += "</ul></div>"
+
+            return html_content
+
+        rg_display_instructions = render_instructions_HTML(rg_instructions, 'Rain Garden Design Recommendations')
+        rg_display_inner = render_plants_HTML(rg_plants_interior, 'Center Area Plants')
+        rg_display_perimeter = render_plants_HTML(rg_plants_perimeter, 'Perimeter Plants')
+        rg_display_notes = render_instructions_HTML(rg_notes, 'Notes')
+
+        # Display the HTML content for Outer/Perimeter Area
+        display(HTML(rg_display_instructions))
+        display(HTML(rg_display_inner))
+        display(HTML(rg_display_perimeter))
+        display(HTML(rg_display_notes))
+  - cellType: TEXT
+    cellId: 7a97de73-70d8-4c97-abbc-bf1d81904b2f # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: null
+    config:
+      richText:
+        - type: paragraph
+          children:
+            - text: RAIN GARDEN DIMENSIONS
+  - cellType: METRIC
+    cellId: f2db2fcd-67d8-4643-83ac-e3f551ff5e35 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain  Garden Area
+    config:
+      title: square feet
+      valueVariableName: rg_area
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: METRIC
+    cellId: 9b5dbf92-d604-4c59-aa62-ef8d2f8fa2db # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain Garden Length
+    config:
+      title: feet long
+      valueVariableName: rg_suggested_length
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: null
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: METRIC
+    cellId: 659043e8-fe69-4873-b70a-d5aa117b8df1 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Rain Garden Width
+    config:
+      title: feet wide
+      valueVariableName: rg_suggested_width
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: null
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: TEXT
+    cellId: c24cb93b-7562-4ab6-aaf5-2a1422f3a3b9 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: null
+    config:
+      richText:
+        - type: paragraph
+          children:
+            - text: RAIN GARDEN -  INTERIOR AND PERIMETER
+  - cellType: METRIC
+    cellId: f9ede994-2adc-4698-b5d4-7f49e6a23dc0 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Interior Area
+    config:
+      title: square feet
+      valueVariableName: rg_interior_area
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: null
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: METRIC
+    cellId: 88a27d84-b17a-4b52-8883-ec5928403e8f # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Plant in Center
+    config:
+      title: " plants"
+      valueVariableName: rg_plants_num_interior
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: METRIC
+    cellId: e1bbd14f-12f6-4e35-b75e-e2e8483d7f9a # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Perimeter Area
+    config:
+      title: square feet
+      valueVariableName: rg_outer_area
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: METRIC
+    cellId: d5cbda38-5c6d-450d-b0d9-94c1cd8908f1 # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Plant around Perimeter
+    config:
+      title: plants
+      valueVariableName: rg_plants_num_outer
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: ""
+      displayFormat:
+        format: NUMBER
+        currency: USD
+        columnType: NUMBER
+        showSeparators: true
+        numDecimalDigits: 0
+        abbreviateLargeNumbers: true
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: METRIC
+    cellId: 7e1cf99e-011a-4d9c-be29-8278db33428c # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Annual Storm Water Diverted and Filtered 
+    config:
+      title: Gallons per Year
+      valueVariableName: storm_water_runoff
+      showComparison: false
+      comparisonType: VALUE
+      comparisonVariableName: null
+      comparisonFormat: null
+      comparisonLabel: null
+      displayFormat: null
+      valueColumn: null
+      valueRowIndex: 0
+      valueAggregate: null
+      comparisonColumn: null
+      comparisonRowIndex: null
+      comparisonAggregate: null
+      valueResultVariable: null
+      comparisonResultVariable: null
+      outputResult: false
+  - cellType: MARKDOWN
+    cellId: 3d5abe38-b7c5-418f-be3a-07e19fb7e30f # DO NOT CHANGE - Hex uses this to match up cells when reimporting the file, and detect any changes to existing cells
+    cellLabel: Notes
+    config:
+      source: |
+        <br>
+
+        ## Notes & Credits
+
+        ### Data Sources & APIs
+         * USDA Plants Database 
+           USDA, NRCS. 2024. The PLANTS Database (http://plants.usda.gov, 10/25/2024). National Plant Data Team, Greensboro, NC USA.
+           <br>Also: https://plants.usda.gov/assets/docs/PLANTS_Help_Document.pdf 
+         
+         * USDA Hardiness Zone Map
+            https://planthardiness.ars.usda.gov/
+
+         * Weather Data from Open-Meteo
+            https://open-meteo.com/en/docs
+            * Note: Total precipitation (rain, showers, snow) sum of the preceding hour. Data is stored with a 0.1 mm precision. 
+              If precipitation data is summed up to monthly sums, there might be small inconsistencies with the total precipitation amount.
+
+        ### Primary Sources
+
+         * Using the Rain Garden Size Factors from Washington, D.C. Department of Energy & Environment 
+            https://doee.dc.gov/sites/default/files/dc/sites/ddoe/publication/attachments/RaingardenHow2HomeownerUWExtension.pdf (page 9)
+
+         * Build a Rain Garden from Five Counties Salmonid Conservation Program
+            https://www.5counties.org/docs/lu_planning/04_rain_garden.pdf   
+
+         * Soak Up the Rain: What's The Problem
+            https://www.epa.gov/soakuptherain/soak-rain-whats-problem
+
+         * Oregon Rain Garden Guide
+           https://seagrant.oregonstate.edu/sites/seagrant.oregonstate.edu/files/h10001-lo.pdf
+
+         * Inches to Gallons Calculator
+        https://www.inchcalculator.com/convert/cubic-inch-to-gallon/
+
+
+        ### Secondary Sources
+         * Harvest Rain from Water Wise from University of Arizona Cooperative Extension
+            https://waterwise.arizona.edu/ways-save-water/harvest-rain
+
+         * Missouri Botanical Garden
+        https://www.missouribotanicalgarden.org/sustainability/sustainability/sustainable-solutions-for-you/rainscaping-guide/design-and-build-a-rain-garden/determine-rain-garden-size-and-depth
+
+         * Beckley Sanitary Board
+        https://beckleysanitaryboard.org/build-your-own-rain-garden/
+
+         * Alabama A&M Extension School
+        https://www.aces.edu/blog/topics/fish-water/step-4-determine-the-size-and-depth-of-the-rain-garden/#:~:text=For%20quick%20and%20simple%20calculations,be%20treated%20divided%20by%2020.
+
+         * New York City Drainage System and Floding
+        https://www.nytimes.com/2023/09/29/nyregion/nyc-sewer-system-infrastructure.html?smid=url-share
+appLayout:
+  visibleMetadataFields:
+    - DESCRIPTION
+    - AUTHOR
+    - LAST_EDITED
+    - LAST_RUN
+    - CATEGORIES
+    - STATUS
+    - TABLE_OF_CONTENTS
+    - NAME
+  fullWidth: false
+  tabs:
+    - name: Get Started
+      rows:
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 7470f848-ed1d-4ed4-acab-c0fbccda7565
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 8ac87f6b-5610-447a-ad10-18d08facaddb
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: b45140d5-c16d-4af7-981e-64fc022ffd92
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 60
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 2522da88-a7fb-4634-bc59-15f61b4d3f7e
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+            - start: 60
+              end: 80
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 683b36af-06ca-4f4d-9af9-bc7e38e4c220
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 3a1757f1-8e9c-4e10-9138-11b4dbca23d8
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+    - name: Precipitation Dashboard
+      rows:
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 285adc85-9f2d-470c-a280-908807cbd1b6
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 27f28d8b-aef9-41f6-9f07-db973e24c311
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 5f659575-8d31-486b-b495-919b10e42462
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: e5b4a723-66df-4a8f-a5d0-19deee9bdf57
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 40
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 3557268a-32ee-4b26-977f-6648039b08c6
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 40
+              end: 80
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 75574f9d-967e-44bc-a0e1-af29a34a192b
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 80
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 269a5558-8ce6-4d53-bb22-9686e3bc0d91
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 91371009-dc18-4262-af89-4330fa0987b2
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 3fcab833-c0cd-495a-a417-0c08c8af8199
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: a5a331f3-25d3-4e05-abbb-9265f0b1eb9c
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 40
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: cc551a76-9a68-45ce-a550-817b4e52a26e
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 40
+              end: 80
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 788ade94-f13c-4f9f-96d9-dd761f9c5f1c
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 80
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 7dd6f499-a983-44f9-a6d5-6cbe93ff12e3
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 0da82e30-e6cb-48e1-80fe-19760d6f026f
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: ed4a9a03-726a-4351-a8cc-9cf939b1c5d3
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: d8d6461c-42d2-4b7f-884f-935e9bb9f152
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 30
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 09322015-3fe3-4277-8197-da4b89b09d98
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 30
+              end: 60
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: bba0ae1d-8c1f-46f9-8f66-3c9d65cbfdb4
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 60
+              end: 90
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 55f65f13-f968-4c90-88c9-16f3e65f7a66
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 90
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 6bc36b22-bd7a-4970-9de0-393c262bb409
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: b76ad0ec-d0b6-4c76-81f8-b9b440e2ce43
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 9b0a34c7-3ecc-4182-b76f-f0e85e326c73
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: c6ff075c-631d-48ad-b08b-70244b0cfc9f
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+    - name: Rain Garden Calculator
+      rows:
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: d9ebf137-9d1a-44fe-a43c-8a11c7fd24bc
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 8ffab3d4-83a3-4e40-938b-93e591722bab
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 30
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 5420d07b-7103-4d71-89ca-6527becacb54
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 30
+              end: 60
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: b9e9b94a-0c1a-4204-8ce0-1a6ef894e81b
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 60
+              end: 90
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 03c93d46-e397-4171-94ad-c35e586c8821
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 90
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: adf64772-fb3a-47d5-b13c-22cefd39baab
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 30
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: d5f4ba8e-640f-46d5-aab6-74af71d2f1a9
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 30
+              end: 60
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 32d25a0f-6530-4992-9699-c2a80579fb79
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 60
+              end: 90
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: ec0b9187-6428-4313-8f36-4fc1de34614c
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: e6b36631-79a0-4343-b056-7eb104a13a57
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 25
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: f2db2fcd-67d8-4643-83ac-e3f551ff5e35
+                  sharedFilterId: null
+                  height: null
+                  showLabel: true
+                  explorable: null
+            - start: 25
+              end: 50
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 88a27d84-b17a-4b52-8883-ec5928403e8f
+                  sharedFilterId: null
+                  height: 150
+                  showLabel: true
+                  explorable: null
+            - start: 50
+              end: 75
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: d5cbda38-5c6d-450d-b0d9-94c1cd8908f1
+                  sharedFilterId: null
+                  height: 150
+                  showLabel: true
+                  explorable: null
+            - start: 75
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 7e1cf99e-011a-4d9c-be29-8278db33428c
+                  sharedFilterId: null
+                  height: 150
+                  showLabel: true
+                  explorable: null
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 19d073f9-0ae7-4078-be0b-1d98035cf704
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+    - name: Notes
+      rows:
+        - columns:
+            - start: 0
+              end: 120
+              elements:
+                - showSource: false
+                  hideOutput: false
+                  type: CELL
+                  cellId: 3d5abe38-b7c5-418f-be3a-07e19fb7e30f
+                  sharedFilterId: null
+                  height: null
+                  showLabel: false
+                  explorable: null
+sharedFilters: []
