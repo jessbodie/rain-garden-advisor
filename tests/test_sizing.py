@@ -147,3 +147,108 @@ def test_resolve_low_perc_rate_falls_back_to_silty():
 def test_resolve_unmatched_rate_band_falls_back_to_silty():
     # 0.95 sits in a gap between bands -> fall back to Silty soil factor.
     assert sizing.resolve_sizing_factor("Sandy", DISTANCE, perc_rate=0.95) == 0.06
+
+
+# --- Explicit "Less than 30 ft" factor values --------------------------------
+
+@pytest.mark.parametrize(
+    "soil, expected",
+    [("Sandy", 0.11), ("Silty", 0.21), ("Clayey", 0.26)],
+)
+def test_less_than_30_factor_values(soil, expected):
+    assert sizing.SOIL_SIZING_FACTORS[soil]["Less than 30 ft"] == expected
+    assert sizing.soil_sizing_factor(soil, "10-30 ft") == expected
+    assert sizing.soil_sizing_factor(soil, "Less than 10 ft") == expected
+
+
+# --- Full end-to-end output table (verified against the notebook) ------------
+
+def compute(cat, soil, distance, rate_str=None):
+    """Run the full sizing pipeline and return rounded, display-ready outputs."""
+    perc_rate = sizing.parse_perc_rate(rate_str)
+    factor = sizing.resolve_sizing_factor(soil, distance, perc_rate)
+    area = sizing.rain_garden_area(cat, factor)
+    dims = sizing.garden_dimensions(area)
+    plants = sizing.plant_counts(dims["length"], dims["width"], area)
+    return {
+        "factor": factor,
+        "area": round(area),
+        "width": round(dims["width"]),
+        "length": round(dims["length"]),
+        "side": round(dims["side"]),
+        "depth": sizing.recommended_depth(area),
+        "interior": round(plants["interior_count"]),
+        "perimeter": round(plants["outer_count"]),
+    }
+
+
+# (cat, soil, distance, rate, factor, area, width, length, side, depth, interior, perimeter)
+FULL_CASES = [
+    # More than 30 ft
+    (700, "Sandy", "More than 30 ft", None, 0.03, 21, 6, 3, 5, 9, 6, 6),
+    (700, "Silty", "More than 30 ft", None, 0.06, 42, 9, 5, 6, 12, 14, 9),
+    (700, "Clayey", "More than 30 ft", None, 0.10, 70, 12, 6, 8, 12, 27, 12),
+    # Less than 30 ft -- "10-30 ft"
+    (700, "Sandy", "10-30 ft", None, 0.11, 77, 12, 6, 9, 12, 31, 13),
+    (700, "Silty", "10-30 ft", None, 0.21, 147, 17, 9, 12, 12, 65, 18),
+    (700, "Clayey", "10-30 ft", None, 0.26, 182, 19, 10, 13, 12, 82, 21),
+    # Less than 30 ft -- "Less than 10 ft" (same factors as 10-30 ft)
+    (700, "Sandy", "Less than 10 ft", None, 0.11, 77, 12, 6, 9, 12, 31, 13),
+    (700, "Silty", "Less than 10 ft", None, 0.21, 147, 17, 9, 12, 12, 65, 18),
+    (700, "Clayey", "Less than 10 ft", None, 0.26, 182, 19, 10, 13, 12, 82, 21),
+    # Rate-based (distance ignored once a rate >= 0.5 is given)
+    (700, "Silty", "More than 30 ft", "1.0", 0.05, 35, 8, 4, 6, 12, 11, 8),
+    (700, "Silty", "More than 30 ft", "0.95", 0.06, 42, 9, 5, 6, 12, 14, 9),
+    (700, "Silty", "More than 30 ft", "20", 0.01, 7, 4, 2, 3, 6, 1, 3),
+]
+
+
+@pytest.mark.parametrize(
+    "cat, soil, distance, rate, factor, area, width, length, side, depth, interior, perimeter",
+    FULL_CASES,
+)
+def test_full_output_table(
+    cat, soil, distance, rate, factor, area, width, length, side, depth, interior, perimeter
+):
+    result = compute(cat, soil, distance, rate)
+    assert result == {
+        "factor": factor,
+        "area": area,
+        "width": width,
+        "length": length,
+        "side": side,
+        "depth": depth,
+        "interior": interior,
+        "perimeter": perimeter,
+    }
+
+
+# --- Edge case: negative interior area is guarded ----------------------------
+
+def test_small_garden_interior_guarded():
+    # cat 100, Sandy, >30 -> area 3; the notebook's formula would give a negative
+    # interior area. The guard clamps area and counts to >= 0.
+    result = compute(100, "Sandy", "More than 30 ft")
+    assert result["factor"] == 0.03
+    assert result["area"] == 3
+    assert result["depth"] == 6
+    assert result["interior"] == 0
+    assert result["perimeter"] == 2
+
+    dims = sizing.garden_dimensions(3.0)
+    plants = sizing.plant_counts(dims["length"], dims["width"], 3.0)
+    assert plants["interior_area"] == 0.0  # clamped (raw value is negative)
+    assert plants["interior_count"] >= 0
+    assert plants["outer_count"] >= 0
+
+
+# --- Parametric formula examples (weather inputs supplied) -------------------
+
+def test_drainage_time_example():
+    # round(((700 / 35) * 0.80) / 1.0, 1) == 16.0
+    assert sizing.drainage_time(700, 35, threshold_precip_rate=0.80, perc_rate=1.0) == 16.0
+
+
+def test_gallons_diverted_example():
+    # round((700 * 144) * 45.0 * 0.004329) == 19636
+    assert sizing.gallons_diverted(700, total_precip_yr=45.0) == 19636

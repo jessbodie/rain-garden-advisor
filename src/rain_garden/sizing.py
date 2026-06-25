@@ -185,10 +185,16 @@ def plant_counts(length: float, width: float, area: float) -> dict[str, float]:
     inset by one plant-width on each side; the perimeter is the remainder. Uses
     the unrounded ``length``/``width`` from :func:`garden_dimensions`. Counts are
     returned unrounded; round for display.
+
+    For very small gardens the notebook's formula yields a *negative* interior
+    area (e.g. a ~3 sq ft garden insets to below zero on each side); the notebook
+    leaves this unguarded. We keep the same formula but clamp the interior and
+    perimeter areas — and therefore the counts — at zero so neither can go
+    negative.
     """
     plant_area = PLANT_WIDTH_FT * PLANT_WIDTH_FT
-    interior_area = (length - PLANT_WIDTH_FT) * (width - PLANT_WIDTH_FT)
-    outer_area = area - interior_area
+    interior_area = max(0.0, (length - PLANT_WIDTH_FT) * (width - PLANT_WIDTH_FT))
+    outer_area = max(0.0, area - interior_area)
     return {
         "interior_area": interior_area,
         "interior_count": interior_area / plant_area,
