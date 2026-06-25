@@ -32,6 +32,16 @@ New York City. Northeast expansion is v2 and requires a region-filtered
 plant dataset.
 Added: 2026-06-25
 
+
+**Plant hardiness filter uses apparent (wind-chill) temperature, not actual**
+precipitation.py returns min_apparent_temp, which the notebook then uses to
+filter plants by USDA Temperature, Minimum (°F). USDA hardiness ratings are
+based on actual air temperature, not perceived/wind-chill. When hardiness.py
+is built, switch the plant filter to use the USDA hardiness zone (from the
+RapidAPI lookup) as the authoritative cold-tolerance filter, and either drop
+min_apparent_temp or repurpose it as an informational value only.
+Added: 2026-06-25
+
 ---
 
 ## Known Issues
