@@ -79,6 +79,16 @@ agent layer goes live, add request-rate limiting (e.g., a simple sleep or a
 token bucket) and a small in-memory or disk cache keyed on the input address.
 Added: 2026-06-25
 
+**RapidAPI hardiness zone is on the BASIC plan (1 req/sec)**
+The current RapidAPI subscription rate-limits to 1 request/second; hardiness.py
+makes no attempt to throttle. At the agent layer, add a rate limiter or short
+sleep between calls, or upgrade the plan if call volume warrants. Caching by
+zip is also worth considering — hardiness zones don't change.
+Added: 2026-06-25
+
+**Deactivate Remove old RapidAPI key**
+
+
 ---
 
 ## Open Questions
