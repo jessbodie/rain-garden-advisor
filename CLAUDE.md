@@ -25,7 +25,7 @@ Do NOT port any calculation logic to JavaScript.
 
 **Deterministic core — five clean modules, each independently testable:**
 - `src/rain_garden/sizing.py` — garden area, dimensions, depth, plant counts ✅
-- `src/rain_garden/precipitation.py` — three weather scalars from Open-Meteo (in progress)
+- `src/rain_garden/precipitation.py` — three weather scalars from Open-Meteo ✅
 - `src/rain_garden/geocode.py` — address → lat/lon via Nominatim (not started)
 - `src/rain_garden/hardiness.py` — USDA hardiness zone via RapidAPI (not started)
 - `src/rain_garden/plants.py` — structured plant filter from CSV (not started)

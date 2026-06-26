@@ -72,6 +72,13 @@ Values contain literal `<i>` and `</i>` tags (e.g. `<i>Abelia ×grandiflora</i>`
 Strip on ingest in `plants.py`.
 Added: 2026-06-25
 
+**Nominatim rate limiting and caching not implemented**
+Nominatim's usage policy is max 1 request/second and asks that results be
+cached. geocode.py currently makes a live call every invocation. Before the
+agent layer goes live, add request-rate limiting (e.g., a simple sleep or a
+token bucket) and a small in-memory or disk cache keyed on the input address.
+Added: 2026-06-25
+
 ---
 
 ## Open Questions
