@@ -1,0 +1,11 @@
+Region Abbreviation,Region Name,Include in v1,States
+AGCP,Atlantic and Gulf Coastal Plain,Yes,"NJ, DE, MD, VA, NC, SC, GA, FL, AL, MS, LA, AR, TX, KY, MO"
+AW,Arid West,Yes,"WA, OR, ID, NV, UT, WY, CO, CA, AZ, NM, TX, MT"
+CB,Caribbean Islands,No,Puerto Rico
+EMP,Eastern Mountains and Piedmont,Yes,"PA, NJ, MD, WV, OH, KY, VA, NC, TN, SC, GA, AL, AR, MO, IA, IL, OK"
+GP,Great Plains,Yes,"MT, ND, SD, WY, NE, CO, KS, OK, NM, TX, MN"
+HI,Hawai'i and Pacific Islands,No,HI
+MW,Midwest,Yes,"MI, IA, WI, IL, MO, NE, KS, OK, OH, IN, MN, SD"
+NCNE,Northcentral and Northeast,Yes,"ME, NH, VT, MA, CT, RI, NY, NJ, PA, OH, MI, WI, IL, MN, IN"
+WMVC,"Western Mountains, Valleys, and Coast",Yes,"WA, OR, CA, ID, MT, WY, UT, CO, AZ, NM"
+AK,Alaska,No,AK

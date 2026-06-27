@@ -42,6 +42,14 @@ RapidAPI lookup) as the authoritative cold-tolerance filter, and either drop
 min_apparent_temp or repurpose it as an informational value only.
 Added: 2026-06-25
 
+**Plant filter uses NWPL+USDA merged data with NCNE region scope**
+plants.py filters nwpl_usda_merged.csv to NCNE region + OBL/FACW/FAC wetland
+indicators + High/Medium moisture + High/Medium drought = 74 candidate plants.
+Region scope expansion to other NWPL regions (AGCP, EMP, etc.) is a v2 task —
+the data structure already supports it, just needs a region parameter on the
+filter function.
+Added: 2026-06-25
+
 ---
 
 ## Known Issues
@@ -114,3 +122,15 @@ curated source list. Candidates identified so far:
 - Oregon Rain Garden Guide (cited in notebook)
 - NYC-specific extension service material (not yet identified)
 Added: 2026-06-25
+
+
+
+
+---
+
+## v3 and Beyond
+
+**Precise NWPL Region Lookup via Shapefile**
+Currently, states that span two NWPL regions (e.g. Virginia spans EMP and AGCP) are handled by querying both regional columns and returning a plant if it qualifies in either. This is a reasonable approximation for v1.
+A more accurate approach: the Army Corps of Engineers publishes NWPL regional boundaries as shapefiles, using the same boundaries as the Regional Supplements to the Corps Wetland Delineation Manual. Given the user's lat/lon (already available from geocode.py), do a spatial point-in-polygon lookup against those shapefiles to determine the exact NWPL region, then query only that column. This eliminates the edge case where a plant is wetland-adapted in one part of a split state but not another.
+Libraries: geopandas, shapely. Shapefiles available at: https://wetland-plants.usace.army.mil

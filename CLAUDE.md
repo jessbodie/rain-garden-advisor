@@ -27,8 +27,8 @@ Do NOT port any calculation logic to JavaScript.
 - `src/rain_garden/sizing.py` — garden area, dimensions, depth, plant counts ✅
 - `src/rain_garden/precipitation.py` — three weather scalars from Open-Meteo ✅
 - `src/rain_garden/geocode.py` — address → lat/lon via Nominatim ✅
-- `src/rain_garden/hardiness.py` — USDA hardiness zone via RapidAPI (not started)
-- `src/rain_garden/plants.py` — structured plant filter from CSV (not started)
+- `src/rain_garden/hardiness.py` — USDA hardiness zone via RapidAPI ✅
+- `src/rain_garden/plants.py` — structured plant filter from CSV (in progress)
 
 **LLM layer comes after all five modules are complete and tested.**
 The agent loop, function calling, and Anthropic SDK are not touched until then.
