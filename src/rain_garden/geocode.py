@@ -5,10 +5,11 @@ an address and return its canonical form, latitude, longitude, and US zip code.
 The notebook's Hex-specific ``address.json`` save/load fallback is intentionally
 omitted — this function just geocodes and returns.
 
-Zip parsing is gated on Nominatim's structured ``country_code``: a zip is
-returned only for US addresses (``country_code == "us"``); international
-addresses return ``None`` even if their canonical address contains a 5-digit
-token (e.g. a French ``75007`` postcode).
+Zip and state are read from Nominatim's structured ``address`` fields, gated on
+a US ``country_code``: ``address.postcode`` (sliced to 5 digits to handle ZIP+4)
+and ``address.ISO3166-2-lvl4`` (e.g. ``"US-NY"`` -> ``"NY"``). International
+results return ``None`` for both, even when their canonical address contains a
+5-digit token (e.g. a French ``75007`` postcode).
 """
 
 from __future__ import annotations
@@ -27,16 +28,31 @@ class AddressNotFoundError(ValueError):
 def _parse_zip(raw: dict) -> str | None:
     """Return the 5-digit US zip from a Nominatim result, else ``None``.
 
-    Only US results (``address.country_code == "us"``) yield a zip; the token is
-    found with the notebook's original logic (first 5-digit, all-digit part of
-    the canonical address split on ``", "``).
+    Reads the structured ``address.postcode`` field, gated on a US
+    ``country_code``. The first five characters are taken so a ZIP+4 value
+    (e.g. ``"11209-1234"``) is normalized to ``"11209"``.
     """
-    if raw.get("address", {}).get("country_code") != "us":
+    address = raw.get("address", {})
+    if address.get("country_code") != "us":
         return None
-    for part in raw["display_name"].split(", "):
-        if part.isdigit() and len(part) == 5:
-            return part
-    return None
+    postcode = address.get("postcode")
+    return postcode[:5] if postcode else None
+
+
+def _parse_state(raw: dict) -> str | None:
+    """Return the two-letter US state abbreviation, else ``None``.
+
+    Extracted from the structured ``address.ISO3166-2-lvl4`` field
+    (e.g. ``"US-NY"`` -> ``"NY"``). Returns ``None`` for non-US results or when
+    the field is absent.
+    """
+    address = raw.get("address", {})
+    if address.get("country_code") != "us":
+        return None
+    iso = address.get("ISO3166-2-lvl4")
+    if not iso or not iso.startswith("US-"):
+        return None
+    return iso[3:]
 
 
 def _build_result(raw: dict) -> dict:
@@ -47,6 +63,7 @@ def _build_result(raw: dict) -> dict:
         "lat": float(raw["lat"]),
         "lon": float(raw["lon"]),
         "zip_code": _parse_zip(raw),
+        "state": _parse_state(raw),
     }
 
 
@@ -60,7 +77,7 @@ def _geocode_live(address: str) -> dict | None:
 
 
 def geocode_address(address: str, fixture: dict | Path | None = None) -> dict:
-    """Geocode ``address`` to ``{address, lat, lon, zip_code}``.
+    """Geocode ``address`` to ``{address, lat, lon, zip_code, state}``.
 
     By default this calls Nominatim live (no API key). For tests, pass
     ``fixture`` as a parsed-JSON ``dict`` or a path to a saved Nominatim
