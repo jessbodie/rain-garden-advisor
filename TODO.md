@@ -22,14 +22,8 @@ Added: 2026-06-25
 
 **Timezone hardcoded to America/New_York**
 `precipitation.py` currently passes `timezone=America%2FNew_York` to Open-Meteo.
-Correct for NYC scope, but needs to be a parameter when expanding to broader
-Northeast or other regions. Refactor before any non-NYC deployment.
-Added: 2026-06-25
-
-**Region scope: NYC only for v1**
-Plant data, hardiness zones, and precipitation defaults are scoped to
-New York City. Northeast expansion is v2 and requires a region-filtered
-plant dataset.
+Needs to be a parameter when expanding to broader
+Northeast or other regions. 
 Added: 2026-06-25
 
 
@@ -42,13 +36,8 @@ RapidAPI lookup) as the authoritative cold-tolerance filter, and either drop
 min_apparent_temp or repurpose it as an informational value only.
 Added: 2026-06-25
 
-**Plant filter uses NWPL+USDA merged data with NCNE region scope**
-plants.py filters nwpl_usda_merged.csv to NCNE region + OBL/FACW/FAC wetland
-indicators + High/Medium moisture + High/Medium drought = 74 candidate plants.
-Region scope expansion to other NWPL regions (AGCP, EMP, etc.) is a v2 task —
-the data structure already supports it, just needs a region parameter on the
-filter function.
-Added: 2026-06-25
+**min_temp null-exclusion is latent in NY/test**
+ for the agent layer - min_temp null-exclusion is latent; only drops by value on current data
 
 ---
 
@@ -62,22 +51,10 @@ check — is unaddressed. A garden below ~9 sq ft (the geometry table minimum)
 should probably return a warning rather than silently produce edge-case counts.
 Added: 2026-06-25
 
-**Plant CSV has no regional native-status data**
-`usda-plants_8-1-2023.csv` is a national dataset with an empty NativeStatuses
-column. The current plant filter (moisture + drought tolerance + shade + soil)
-does not filter by region or native status. A region-filtered re-pull from USDA
-PLANTS is needed before `plants.py` is production-ready.
-`nyc_rain_garden_native_plants.csv` exists as a hand-curated fallback for v1.
-Added: 2026-06-25
 
 **RapidAPI hardiness zone key was previously hardcoded in the Hex notebook**
 The exposed key (in the YAML export) should be revoked if not already done.
 The new key must live only in `.env`.
-Added: 2026-06-25
-
-**USDA PLANTS ScientificName has embedded HTML tags**
-Values contain literal `<i>` and `</i>` tags (e.g. `<i>Abelia ×grandiflora</i>`).
-Strip on ingest in `plants.py`.
 Added: 2026-06-25
 
 **Nominatim rate limiting and caching not implemented**
@@ -110,7 +87,7 @@ Added: 2026-06-25
 **Plant spacing assumption**
 The notebook allocates 1.33 sq ft per plant (1.33 × 1.33 = 1.77 sq ft each).
 This is a rough estimate. Verify against any regional extension-service guidance
-for the plant types actually in the NYC native list.
+for the plant types.
 Added: 2026-06-25
 
 **RAG corpus sources**
@@ -120,7 +97,6 @@ curated source list. Candidates identified so far:
 - Five Counties Salmonid Conservation Program guide (already cited)
 - EPA "Soak Up the Rain" guidance
 - Oregon Rain Garden Guide (cited in notebook)
-- NYC-specific extension service material (not yet identified)
 Added: 2026-06-25
 
 

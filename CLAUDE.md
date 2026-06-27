@@ -28,7 +28,7 @@ Do NOT port any calculation logic to JavaScript.
 - `src/rain_garden/precipitation.py` — three weather scalars from Open-Meteo ✅
 - `src/rain_garden/geocode.py` — address → lat/lon via Nominatim ✅
 - `src/rain_garden/hardiness.py` — USDA hardiness zone via RapidAPI ✅
-- `src/rain_garden/plants.py` — structured plant filter from CSV (in progress)
+- `src/rain_garden/plants.py` — structured plant filter from CSV ✅
 
 **LLM layer comes after all five modules are complete and tested.**
 The agent loop, function calling, and Anthropic SDK are not touched until then.
@@ -68,10 +68,8 @@ in TODO.md.
 
 - `data/RainGarden-SizeFactors.csv` — sizing factor lookup table (source of truth
   for under-30ft soil factors)
-- `data/usda-plants_8-1-2023.csv` — national USDA PLANTS dataset; NativeStatuses
-  column is empty; region filtering is a known open issue (see TODO.md)
-- `data/nyc_rain_garden_native_plants.csv` — hand-curated NYC native plant list;
-  fallback for v1 plants module
+- `src/rain_garden/data/nwpl_usda_merged.csv` — National Wetlands Plant List (NWPL) merged and enriched with USDA PLANTS dataset
+- `src/rain_garden/data/NWPL_RegionStateMapping.csv` — Maps NWPL regions to U.S. States
 
 ---
 

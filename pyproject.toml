@@ -12,6 +12,7 @@ dependencies = [
     "requests",
     "numpy",
     "geopy",
+    "pandas",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +22,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+rain_garden = ["data/*.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
