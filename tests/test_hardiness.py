@@ -16,6 +16,7 @@ from rain_garden.hardiness import (
     InvalidZipCodeError,
     MissingAPIKeyError,
     get_hardiness_zone,
+    min_temp_floor,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -75,3 +76,25 @@ def test_missing_api_key_raises(monkeypatch):
     monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
     with pytest.raises(MissingAPIKeyError):
         get_hardiness_zone("11209")  # live path, no fixture
+
+
+# --- min_temp_floor -----------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [("5 to 10", 5), ("-30 to -25", -30), ("0 to 5", 0), ("10 to 15 (F)", 10)],
+)
+def test_min_temp_floor_parses_lower_bound(raw, expected):
+    assert min_temp_floor(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "n/a", None])
+def test_min_temp_floor_unparseable_raises(raw):
+    with pytest.raises(ValueError):
+        min_temp_floor(raw)
+
+
+def test_min_temp_floor_from_hardiness_result():
+    # Integration: the Brooklyn fixture's range "5 to 10" -> floor 5.
+    result = get_hardiness_zone("11209", fixture=_load("hardiness_11209.json"))
+    assert min_temp_floor(result["min_temp_range"]) == 5

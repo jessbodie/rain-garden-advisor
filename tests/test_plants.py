@@ -99,19 +99,20 @@ def test_data_override_accepts_path():
     assert len(df) == 74
 
 
-# --- min_temp smoke (filter fires + excludes nulls; not validating direction) -
+# --- local_min_temp: keep hardy, drop tender + nulls (corrected direction) ----
 
 def _synthetic_ny_frame():
-    """Minimal NY-region frame: one warm, one cold, one null-temp plant."""
+    """Minimal NY-region frame: one tender, one hardy, one null-temp plant."""
     return pd.DataFrame(
         {
             "NCNE": ["OBL", "OBL", "OBL"],
             "Moisture Use": ["High", "High", "High"],
             "Drought Tolerance": ["High", "High", "High"],
+            # Rated minimum survivable temperature for each plant.
             plants.TEMP_COL: [10.0, -20.0, None],
-            "Common Name": ["Warm", "Cold", "Unknown"],
+            "Common Name": ["Tender", "Hardy", "Unknown"],
             "Scientific Name": ["a", "b", "c"],
-            "Symbol": ["WARM", "COLD", "NULL"],
+            "Symbol": ["TENDER", "HARDY", "NULL"],
             plants.HEIGHT_COL: [3, 3, 3],
             "Bloom Period": ["Spring", "Spring", "Spring"],
             "Flower Color": ["Blue", "Blue", "Blue"],
@@ -119,11 +120,18 @@ def _synthetic_ny_frame():
     )
 
 
-def test_min_temp_filter_fires_and_excludes_nulls():
+def test_local_min_temp_keeps_hardy_drops_tender_and_nulls():
     df = _synthetic_ny_frame()
     # Without the filter, all three qualify.
     assert len(filter_plants("NY", data=df)) == 3
-    # With min_temp active, the filter fires (drops the cold plant) AND excludes
-    # the null-temp plant — leaving only the warm one.
-    kept = filter_plants("NY", min_temp=0, data=df)
-    assert list(kept["Symbol"]) == ["WARM"]
+    # Local winter floor of 0°F: keep plants rated to survive at or below 0
+    # (HARDY, rated -20), drop the tender plant (rated +10) and the null-temp row.
+    kept = filter_plants("NY", local_min_temp=0, data=df)
+    assert list(kept["Symbol"]) == ["HARDY"]
+
+
+def test_local_min_temp_direction_regression_real_data():
+    # 5°F is NY hardiness zone 7b's lower bound (from the 11209 fixture).
+    # Correct direction keeps the hardy majority (the old `> floor` bug kept 4/16).
+    assert len(filter_plants("NY", local_min_temp=5)) == 70
+    assert len(filter_plants("NJ", local_min_temp=5)) == 105

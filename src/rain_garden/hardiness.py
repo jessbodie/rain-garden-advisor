@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 API_HOST = "usda-plant-hardiness-zones.p.rapidapi.com"
@@ -109,3 +110,19 @@ def get_hardiness_zone(zip_code: str, fixture: dict | Path | None = None) -> dic
         )
 
     return {"zone": zone, "min_temp_range": min_temp_range, "zip_code": zip_code}
+
+
+def min_temp_floor(min_temp_range: str) -> int:
+    """Return the lower bound (°F) of a hardiness zone's temperature range.
+
+    e.g. ``"5 to 10"`` -> ``5``, ``"-30 to -25"`` -> ``-30``. This is the
+    location's winter survival floor — the correct value to pass to
+    ``plants.filter_plants(local_min_temp=...)``. Raises :class:`ValueError` if
+    no integer can be parsed.
+    """
+    match = re.search(r"-?\d+", min_temp_range or "")
+    if not match:
+        raise ValueError(
+            f"Could not parse a minimum temperature from {min_temp_range!r}."
+        )
+    return int(match.group())

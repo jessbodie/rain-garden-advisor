@@ -35,9 +35,20 @@ is built, switch the plant filter to use the USDA hardiness zone (from the
 RapidAPI lookup) as the authoritative cold-tolerance filter, and either drop
 min_apparent_temp or repurpose it as an informational value only.
 Added: 2026-06-25
+RESOLVED 2026-06-28: plants.filter_plants now takes `local_min_temp`, sourced
+from the hardiness zone's lower bound via hardiness.min_temp_floor() (not
+min_apparent_temp). The comparison direction was also inverted in the notebook
+(it kept cold-tender plants); fixed to keep plants whose rated minimum is at or
+below the local floor. STILL OPEN: precipitation.py still computes
+min_apparent_temp — decide at the agent layer whether to drop it or keep it as
+informational only.
 
-**min_temp null-exclusion is latent in NY/test**
- for the agent layer - min_temp null-exclusion is latent; only drops by value on current data
+**min_temp direction bug (notebook kept cold-tender plants)**
+Added: 2026-06-25
+RESOLVED 2026-06-28: corrected to `plant_min_temp <= local_min_temp`. On current
+data the null-temp exclusion is latent (every NY/NJ candidate has a non-null min
+temp, so the filter only ever drops by value) — fine, just noted for the agent
+layer.
 
 ---
 

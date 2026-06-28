@@ -107,12 +107,19 @@ def filter_plants(
     wetland_indicators: tuple[str, ...] = ("OBL", "FACW", "FAC"),
     moisture: tuple[str, ...] = ("High", "Medium"),
     drought: tuple[str, ...] = ("High", "Medium"),
-    min_temp: float | None = None,
+    local_min_temp: float | None = None,
     soil_type: str | None = None,
     sun: str | None = None,
     data=None,
 ) -> pd.DataFrame:
     """Filter plants for ``state`` and zone them interior vs. perimeter.
+
+    ``local_min_temp`` is the location's winter survival floor (°F) — the **lower
+    bound of its USDA hardiness zone** (e.g. zone 7b → 5). When supplied, a plant
+    qualifies if its rated minimum temperature is at or below that floor, i.e. it
+    is hardy enough to survive the local winter. (The source notebook had this
+    comparison inverted — and used wind-chill apparent temperature, a comfort
+    metric — which kept the cold-tender plants and discarded the hardy ones.)
 
     ``data`` (optional) injects a plant DataFrame or a path to one, bypassing the
     packaged dataset (mirrors the fixture-injection pattern in other modules).
@@ -136,9 +143,12 @@ def filter_plants(
     d = d[d["Moisture Use"].isin(moisture)]
     d = d[d["Drought Tolerance"].isin(drought)]
 
-    if min_temp is not None:
+    if local_min_temp is not None:
+        # Keep plants hardy enough for the local winter floor: a plant survives
+        # if its rated minimum temperature is at or below the floor. NaN <= x is
+        # False, so plants with no min-temp data are excluded while filtering.
         temp = pd.to_numeric(d[TEMP_COL], errors="coerce")
-        d = d[temp > min_temp]  # NaN > x is False, so null-temp rows are excluded
+        d = d[temp <= local_min_temp]
 
     if soil_type == "Clayey":
         d = d[d["Adapted to Fine Textured Soils"] == "Yes"]
