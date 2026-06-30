@@ -6,12 +6,15 @@ Network-backed module functions are monkeypatched on the ``tools`` module;
 
 import json
 
+import pandas as pd
 import pytest
 
 import tools
 from tools import FatalToolError, dispatch, geocode_and_gate
 from rain_garden.geocode import AddressNotFoundError
 from rain_garden.hardiness import HardinessZoneNotFoundError, MissingAPIKeyError
+from rain_garden import plants
+from rain_garden.plants import TEMP_COL, filter_plants
 
 
 def _dumpable(obj):
@@ -23,7 +26,8 @@ def _dumpable(obj):
 # --- JSON safety across all tools --------------------------------------------
 
 def test_filter_plants_dispatch_is_json_safe():
-    result = dispatch("filter_plants", {"state": "NY"})
+    # Floor supplied so the populated branch (numpy-typed plant records) is exercised.
+    result = dispatch("filter_plants", {"state": "NY", "local_min_temp": 5})
     assert _dumpable(result)
 
 
@@ -57,7 +61,7 @@ def test_hardiness_dispatch_includes_numeric_floor(monkeypatch):
 # --- filter_plants shaping ----------------------------------------------------
 
 def test_filter_plants_shape_and_trim():
-    result = dispatch("filter_plants", {"state": "NY"})
+    result = dispatch("filter_plants", {"state": "NY", "local_min_temp": 5})
     assert set(result) == {"interior", "perimeter"}
     expected_keys = {"common_name", "bloom_period", "flower_color", "height_ft", "moisture_use"}
     for zone in ("interior", "perimeter"):
@@ -65,6 +69,40 @@ def test_filter_plants_shape_and_trim():
         assert result[zone], f"{zone} should be non-empty for NY"
         for record in result[zone]:
             assert set(record) == expected_keys
+
+
+# --- filter_plants hardiness-floor guard (both branches) ----------------------
+
+def test_filter_plants_present_floor_returns_hardy_plants_no_reason():
+    floor = 5
+    result = dispatch("filter_plants", {"state": "NY", "local_min_temp": floor})
+    # normal-branch shape: exactly interior + perimeter, never a reason key —
+    # locks the two output shapes so they can't drift.
+    assert set(result) == {"interior", "perimeter"}
+    assert result["interior"] and result["perimeter"]
+    # Regression guard for the inverted-comparison bug. The temp column is stripped
+    # from both the tool output and filter_plants' returned frame, so cross-reference
+    # each kept plant's Symbol against the source data and assert it is rated hardy
+    # enough (min_temp <= floor) with no null-temp rows surviving.
+    kept = filter_plants("NY", local_min_temp=floor)
+    source = plants._load_plants()
+    matched = source[source["Symbol"].isin(kept["Symbol"])]
+    # Symbol is not globally unique in the source; assert the kept set maps 1:1 so the
+    # temp lookup below can't silently pass on a mismatched duplicate row.
+    assert len(matched) == len(kept)
+    temps = pd.to_numeric(matched[TEMP_COL], errors="coerce")
+    assert temps.notna().all()
+    assert (temps <= floor).all()
+
+
+def test_filter_plants_absent_floor_returns_empty_with_reason():
+    result = dispatch("filter_plants", {"state": "NY"})
+    assert result["interior"] == []
+    assert result["perimeter"] == []
+    assert isinstance(result["reason"], str) and result["reason"]
+    # exactly these three keys — no leakage, no drift
+    assert set(result) == {"interior", "perimeter", "reason"}
+    assert _dumpable(result)
 
 
 # --- Two-tier error handling --------------------------------------------------
@@ -86,7 +124,9 @@ def test_recoverable_lookup_failure_returns_error(monkeypatch):
 
 
 def test_invalid_state_is_recoverable():
-    result = dispatch("filter_plants", {"state": "ZZ"})
+    # Floor supplied so the call reaches state validation (the no-floor guard
+    # short-circuits before filter_plants would raise InvalidStateError).
+    result = dispatch("filter_plants", {"state": "ZZ", "local_min_temp": 5})
     assert result["is_error"] is True
 
 

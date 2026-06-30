@@ -34,10 +34,10 @@ Do NOT port any calculation logic to JavaScript.
 deterministic site advisories (not the LLM). `size_garden` takes two *separate* slope inputs:
 `slope_ok` (grade/steepness, ≤12%; false → blocking advisory) and `slopes_away_from_house`
 (direction; false → a *corrective* advisory to build an overflow outlet away from the foundation —
-does not block, `recommended` stays true). Omitting a slope input fires no advisory.
+does not block, `recommended` stays true). Omitting a slope input fires no advisory. ✅
 
 **LLM layer comes after all five modules are complete and tested.**
-The agent loop ✅, function calling, and Anthropic SDK are not touched until then.
+The agent loop (in progress), function calling, and Anthropic SDK are not touched until then.
 
 **RAG is scoped to unstructured prose only.**
 Construction, maintenance, and troubleshooting guidance = RAG.

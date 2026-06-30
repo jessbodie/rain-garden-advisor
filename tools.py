@@ -366,9 +366,24 @@ def _run(tool_name: str, tool_input: dict):
         }
 
     if tool_name == "filter_plants":
+        local_min_temp = tool_input.get("local_min_temp")
+        if local_min_temp is None:
+            # Without a winter survival floor we cannot screen plants for cold
+            # hardiness; returning an unfiltered list would silently recommend
+            # plants that may not survive the local winter. Return empty + reason.
+            return {
+                "interior": [],
+                "perimeter": [],
+                "reason": (
+                    "No plants selected: the hardiness lookup did not supply a "
+                    "minimum-temperature floor ('local_min_temp'), so plants "
+                    "cannot be screened for cold hardiness. Run get_hardiness_zone "
+                    "and pass its 'min_temp_floor' as 'local_min_temp'."
+                ),
+            }
         df = filter_plants(
             tool_input["state"],
-            local_min_temp=tool_input.get("local_min_temp"),
+            local_min_temp=local_min_temp,
             soil_type=tool_input.get("soil_type"),
             sun=tool_input.get("sun"),
         )

@@ -119,7 +119,7 @@ Added: 2026-06-29
 
 **RapidAPI hardiness zone key was previously hardcoded in the Hex notebook**
 The exposed key (in the YAML export) should be revoked if not already done.
-The new key must live only in `.env`.
+The new key lives in `.env`.
 Added: 2026-06-25
 
 **Nominatim rate limiting and caching not implemented**
@@ -136,7 +136,10 @@ sleep between calls, or upgrade the plan if call volume warrants. Caching by
 zip is also worth considering — hardiness zones don't change.
 Added: 2026-06-25
 
-**Note the data/RainGarden-sizeFactors.csv updated descrip and added category for Loamy**
+
+**Confirm the steepness asymmetry is  implemented as intended** 
+slopes_away_from_house omitted → no advisory (good). But check whether slope_ok omitted still triggers its blocking advisory via the notebook's "not True" pattern. If slope_ok=None blocks while slopes_away_from_house=None stays silent, that's an inconsistency a user hits by simply not answering the steepness question. You don't need to fix it in this commit — just confirm it's a deliberate choice and not a latent surprise
+
 
 **Slope direction advisory added to size_garden**
 tools.py `size_garden` now takes `slopes_away_from_house` (boolean, optional) —
