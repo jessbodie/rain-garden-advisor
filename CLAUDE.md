@@ -63,7 +63,7 @@ in TODO.md.
 - `.env` is gitignored. Never commit keys.
 - `.env.example` lists variable names with no values.
 - `RAPIDAPI_KEY` — USDA hardiness zone API (RapidAPI)
-- `ANTHROPIC_API_KEY` — added later, for the app's LLM calls (not the same
+- `ANTHROPIC_API_KEY` — for the app's LLM calls (not the same
   as a Claude.ai subscription; billed per token via console.anthropic.com)
 - Open-Meteo (precipitation) and Nominatim (geocoding) require no keys.
   Nominatim requires a descriptive User-Agent string.
