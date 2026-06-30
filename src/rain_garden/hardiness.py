@@ -58,9 +58,11 @@ def _validate_zip(zip_code) -> str:
 def _fetch(zip_code: str) -> dict:
     """Call the RapidAPI hardiness-zone endpoint and return its JSON."""
     import requests  # lazy: only needed for live calls
-    from dotenv import load_dotenv
+    from dotenv import find_dotenv, load_dotenv
 
-    load_dotenv()
+    # usecwd=True is robust to how the entrypoint is launched (repo-root script,
+    # pytest, etc.) and avoids find_dotenv's frame-walking edge cases.
+    load_dotenv(find_dotenv(usecwd=True))
     api_key = os.getenv("RAPIDAPI_KEY")
     if not api_key:
         raise MissingAPIKeyError(
@@ -112,17 +114,14 @@ def get_hardiness_zone(zip_code: str, fixture: dict | Path | None = None) -> dic
     return {"zone": zone, "min_temp_range": min_temp_range, "zip_code": zip_code}
 
 
-def min_temp_floor(min_temp_range: str) -> int:
+def min_temp_floor(min_temp_range: str) -> int | None:
     """Return the lower bound (°F) of a hardiness zone's temperature range.
 
     e.g. ``"5 to 10"`` -> ``5``, ``"-30 to -25"`` -> ``-30``. This is the
     location's winter survival floor — the correct value to pass to
-    ``plants.filter_plants(local_min_temp=...)``. Raises :class:`ValueError` if
-    no integer can be parsed.
+    ``plants.filter_plants(local_min_temp=...)``. Returns ``None`` for a
+    ``None``/malformed range string (so callers, e.g. the tool layer, can never
+    be crashed by an unparseable value).
     """
     match = re.search(r"-?\d+", min_temp_range or "")
-    if not match:
-        raise ValueError(
-            f"Could not parse a minimum temperature from {min_temp_range!r}."
-        )
-    return int(match.group())
+    return int(match.group()) if match else None

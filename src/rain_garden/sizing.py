@@ -21,11 +21,14 @@ import math
 # --- Constants and lookup tables (transcribed from the notebook) -------------
 
 #: Soil-type sizing factors keyed by distance from the foundation.
-#: "More than 30 ft" column: Washington, D.C. DOEE rain garden size factors.
+#: "More than 30 ft" column: Washington, D.C. DOEE rain garden size factors
+#: (Sandy/Silty/Clayey). Loam has no DOEE value; 0.05 is chosen to reflect its
+#: slightly-better-than-silt drainage (loam perc 1.02-2.41 vs silt 0.5-2 in/hr).
 #: "Less than 30 ft" column: precomputed from data/RainGarden-SizeFactors.csv as
 #: round((6-7" deep + 8" deep) / 2, 2) per soil type.
 SOIL_SIZING_FACTORS: dict[str, dict[str, float]] = {
     "Sandy": {"More than 30 ft": 0.03, "Less than 30 ft": 0.11},
+    "Loamy": {"More than 30 ft": 0.05, "Less than 30 ft": 0.20},
     "Silty": {"More than 30 ft": 0.06, "Less than 30 ft": 0.21},
     "Clayey": {"More than 30 ft": 0.10, "Less than 30 ft": 0.26},
 }
@@ -64,12 +67,13 @@ PLANT_WIDTH_FT = 1.33
 MAX_PERC_RATE = 18.0
 
 #: Input soil-type labels mapped to the key used for soil-factor lookup.
-#: Loamy / Silty / unknown have no dedicated factor, so they use Silty (mid-range).
+#: Sandy/Loamy/Silty/Clayey are first-class; only the legacy unknown sentinel
+#: falls back to Silty (the tool layer handles undetermined soil separately).
 _SOIL_LOOKUP = {
     "Sandy": "Sandy",
+    "Loamy": "Loamy",
     "Clayey": "Clayey",
     "Silty": "Silty",
-    "Loamy": "Silty",
     "I'm not sure": "Silty",
 }
 

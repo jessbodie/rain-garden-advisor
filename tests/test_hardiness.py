@@ -89,9 +89,8 @@ def test_min_temp_floor_parses_lower_bound(raw, expected):
 
 
 @pytest.mark.parametrize("raw", ["", "n/a", None])
-def test_min_temp_floor_unparseable_raises(raw):
-    with pytest.raises(ValueError):
-        min_temp_floor(raw)
+def test_min_temp_floor_unparseable_returns_none(raw):
+    assert min_temp_floor(raw) is None
 
 
 def test_min_temp_floor_from_hardiness_result():

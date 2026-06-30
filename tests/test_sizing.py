@@ -129,9 +129,17 @@ def test_parse_perc_rate(raw, expected):
 
 # --- resolve_sizing_factor branches ------------------------------------------
 
-def test_resolve_unknown_and_loamy_map_to_silty():
+def test_resolve_unknown_maps_to_silty():
+    # The legacy "I'm not sure" sentinel still falls back to Silty's factor.
     assert sizing.resolve_sizing_factor("I'm not sure", DISTANCE, None) == 0.06
-    assert sizing.resolve_sizing_factor("Loamy", DISTANCE, None) == 0.06
+
+
+def test_resolve_loamy_is_first_class():
+    # Loamy is a first-class soil type, NOT collapsed to Silty.
+    assert sizing.resolve_sizing_factor("Loamy", "More than 30 ft", None) == 0.05
+    assert sizing.resolve_sizing_factor("Loamy", "10-30 ft", None) == 0.20
+    assert sizing.resolve_sizing_factor("Loamy", DISTANCE, None) != \
+        sizing.resolve_sizing_factor("Silty", DISTANCE, None)
 
 
 def test_resolve_perc_rate_overrides_soil():
@@ -153,7 +161,7 @@ def test_resolve_unmatched_rate_band_falls_back_to_silty():
 
 @pytest.mark.parametrize(
     "soil, expected",
-    [("Sandy", 0.11), ("Silty", 0.21), ("Clayey", 0.26)],
+    [("Sandy", 0.11), ("Loamy", 0.20), ("Silty", 0.21), ("Clayey", 0.26)],
 )
 def test_less_than_30_factor_values(soil, expected):
     assert sizing.SOIL_SIZING_FACTORS[soil]["Less than 30 ft"] == expected
@@ -200,6 +208,9 @@ FULL_CASES = [
     (700, "Silty", "More than 30 ft", "1.0", 0.05, 35, 8, 4, 6, 12, 11, 8),
     (700, "Silty", "More than 30 ft", "0.95", 0.06, 42, 9, 5, 6, 12, 14, 9),
     (700, "Silty", "More than 30 ft", "20", 0.01, 7, 4, 2, 3, 6, 1, 3),
+    # Loamy (first-class) — oracle independently derived, validated vs the Silty row.
+    (700, "Loamy", "More than 30 ft", None, 0.05, 35, 8, 4, 6, 12, 11, 8),
+    (700, "Loamy", "10-30 ft", None, 0.20, 140, 17, 8, 12, 12, 61, 18),
 ]
 
 

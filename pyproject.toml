@@ -13,6 +13,7 @@ dependencies = [
     "numpy",
     "geopy",
     "pandas",
+    "anthropic",
 ]
 
 [project.optional-dependencies]
@@ -28,3 +29,4 @@ rain_garden = ["data/*.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

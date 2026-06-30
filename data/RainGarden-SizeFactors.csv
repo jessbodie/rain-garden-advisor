@@ -1,4 +1,5 @@
 Type of Soil,"3-5"" deep","6-7"" deep","8"" deep",Description,Typical Percolation Rate (inches/hour) (Low End),Typical Percolation Rate (inches/hour) (High End)
-Sandy,0.19,0.15,0.08,"Feels gritty and coarse, drains quickly",1,8
-Silty,0.34,0.25,0.16,Smooth but not clumpy,0.5,2
-Clayey,0.43,0.32,0.2,"Feels dense and clumpy, drains slowly",0,0.17
+Sandy,0.19,0.15,0.08,"Feels gritty and coarse, drains quickly. Sandy soil is gritty and light colored because it lacks humus, the dark colored organic material in soil that delivers nutrients to plants. It is made of tiny pieces of rock and sand and allows water to drain easily.",1,8
+Loamy,0.32,0.24,0.15," is a type of soil that has coarse sand, tiny silt particles, and clay in equal amounts. This is a great soil for gardens because it allows plants to grow roots easily and provides good drainage without drying out. It’s also easier to dig in! ",1.02,2.41
+Silty,0.34,0.25,0.16,"Smooth but not clumpy. Silty soil is a highly fertile, moisture-retentive soil made of mineral particles that are smaller than sand but larger than clay. It feels soft and powdery like flour when dry, and slippery like wet soap when wet.",0.5,2
+Clayey,0.43,0.32,0.2,"Feels dense and clumpy, drains slowly. Clay soil is sticky and hard to dig in. Clay is made of very small sediment that packs together tightly. This makes it more difficult for a plant’s delicate roots to penetrate and hard for water to sink in. ",0.02,0.17

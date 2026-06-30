@@ -18,10 +18,18 @@ from rain_garden import sizing
 # so the test confirms the correct file is read regardless of CWD.
 CSV_PATH = Path(__file__).resolve().parents[1] / "data" / "RainGarden-SizeFactors.csv"
 
-# Exact expected values. These are float-rounding edge cases:
-#   (0.15 + 0.08) / 2 -> 0.11 (rounds down)
-#   (0.25 + 0.16) / 2 -> 0.21 (rounds up)
-EXPECTED_LESS_THAN_30 = {"Sandy": 0.11, "Silty": 0.21, "Clayey": 0.26}
+# Exact expected derived values for every soil row in the CSV. Some are
+# float-rounding edge cases: (0.15 + 0.08) / 2 -> 0.11 (down), (0.25 + 0.16) / 2
+# -> 0.21 (up). All four are first-class, inlined soil types in sizing.py.
+EXPECTED_LESS_THAN_30 = {
+    "Sandy": 0.11,
+    "Loamy": 0.20,
+    "Silty": 0.21,
+    "Clayey": 0.26,
+}
+
+# Soils that sizing.py models as first-class inlined constants (here, all of them).
+SIZING_MODELED_SOILS = tuple(EXPECTED_LESS_THAN_30)
 
 
 def _derive_by_key(rows) -> dict[str, float]:
@@ -49,11 +57,10 @@ def test_derived_factors_match_expected_exactly():
     assert derived == EXPECTED_LESS_THAN_30
 
 
-@pytest.mark.parametrize("soil, expected", EXPECTED_LESS_THAN_30.items())
-def test_derived_factor_matches_inlined_constant(soil, expected):
+@pytest.mark.parametrize("soil", SIZING_MODELED_SOILS)
+def test_derived_factor_matches_inlined_constant(soil):
     derived = _derive_by_key(_read_rows())
-    assert derived[soil] == expected
-    assert sizing.SOIL_SIZING_FACTORS[soil]["Less than 30 ft"] == expected
+    assert sizing.SOIL_SIZING_FACTORS[soil]["Less than 30 ft"] == derived[soil]
 
 
 def test_key_join_is_order_independent():

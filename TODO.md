@@ -62,6 +62,23 @@ check — is unaddressed. A garden below ~9 sq ft (the geometry table minimum)
 should probably return a warning rather than silently produce edge-case counts.
 Added: 2026-06-25
 
+**getDepth saturates for real-world catchments**
+`recommended_depth` looks up the closest row in the geometry table, which tops
+out at 36 sq ft min-area → 12" depth. Any garden >= ~36 sq ft clamps to 12",
+so depth is effectively constant for essentially all real catchments. Faithful
+to the notebook, but the depth output carries no information above that size.
+Revisit whether depth should scale (or be dropped) for larger gardens.
+Added: 2026-06-29
+
+**Plant-count geometry doesn't sanity-check small gardens**
+The plant-count math allots 1.33 sq ft/plant by area but ignores whether the
+plants physically fit the footprint. E.g. a 0.05-factor garden (Loamy/700 sq ft,
+area 35) has a ~4 ft length → ~2.67 ft plantable interior width, yet the model
+places 11 interior plants, which can't physically fit in that strip. Faithful to
+the notebook; needs a geometry-aware feasibility check (or a per-row spacing
+cap) so counts don't exceed what the dimensions support.
+Added: 2026-06-29
+
 
 **RapidAPI hardiness zone key was previously hardcoded in the Hex notebook**
 The exposed key (in the YAML export) should be revoked if not already done.
@@ -82,8 +99,7 @@ sleep between calls, or upgrade the plan if call volume warrants. Caching by
 zip is also worth considering — hardiness zones don't change.
 Added: 2026-06-25
 
-**Deactivate Remove old RapidAPI key**
-
+**Note the data/RainGarden-sizeFactors.csv updated descrip and added category for Loamy**
 
 ---
 
@@ -91,8 +107,7 @@ Added: 2026-06-25
 
 **Less-than-10-ft distance path**
 The notebook warns against siting a rain garden within 10 ft of the foundation
-but still runs the calculation using the less-30ft sizing factor. Decide whether
-the advisor should hard-block or warn-and-continue for this case.
+but still runs the calculation using the less-30ft sizing factor. The advisor should warn-and-continue for this case.
 Added: 2026-06-25
 
 **Plant spacing assumption**
