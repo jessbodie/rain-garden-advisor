@@ -203,6 +203,14 @@ TOOLS = [
                     "type": "boolean",
                     "description": "True if the site slope is flat or under 12%.",
                 },
+                "slopes_away_from_house": {
+                    "type": "boolean",
+                    "description": (
+                        "Whether the ground slopes away from the house or is flat (true) "
+                        "vs. slopes toward the house (false). Separate from slope_ok, which "
+                        "is the grade/steepness check."
+                    ),
+                },
                 "perc_rate": {
                     "type": "string",
                     "description": "Measured drainage/percolation rate (inches/hour), if known.",
@@ -224,7 +232,7 @@ TOOLS = [
 
 # --- size_garden composition -------------------------------------------------
 
-def _advisories(determined_soil, distance, slope_ok, perc_input, parsed_rate):
+def _advisories(determined_soil, distance, slope_ok, slopes_away_from_house, perc_input, parsed_rate):
     """Deterministic site advisories as {type, severity, message} objects."""
     out = [{
         "type": "utilities", "severity": "informational",
@@ -259,6 +267,18 @@ def _advisories(determined_soil, distance, slope_ok, perc_input, parsed_rate):
             "type": "slope", "severity": "blocking",
             "message": "Slope exceeds 12% — regrade or choose a flatter location.",
         })
+    # Direction (distinct from steepness): only when explicitly toward the house.
+    # True or omitted (None) -> no advisory; don't nag when direction wasn't assessed.
+    if slopes_away_from_house is False:
+        out.append({
+            "type": "slope_toward_house", "severity": "corrective",
+            "message": (
+                "This spot slopes toward the house. A rain garden here is workable, but it "
+                "is essential to build a robust overflow outlet that channels excess water "
+                "away from the foundation. Without one, overflow during heavy storms can pool "
+                "against the house. Plan the outlet before you dig."
+            ),
+        })
     if perc_input and parsed_rate is None:
         out.append({
             "type": "rate_unparsed", "severity": "informational",
@@ -272,6 +292,7 @@ def _size_garden(
     soil_type=None,
     distance="More than 30 ft",
     slope_ok=True,
+    slopes_away_from_house=None,
     perc_rate=None,
     threshold_precip_rate=None,
     total_precip_yr=None,
@@ -310,7 +331,9 @@ def _size_garden(
         "gallons_per_year": gallons,
     }
 
-    advisories = _advisories(determined_soil, distance, slope_ok, perc_rate, parsed_rate)
+    advisories = _advisories(
+        determined_soil, distance, slope_ok, slopes_away_from_house, perc_rate, parsed_rate
+    )
     recommended = not any(a["severity"] == "blocking" for a in advisories)
 
     # Sub-0.5 drainage: the footprint is provisional, never a confident
@@ -358,6 +381,7 @@ def _run(tool_name: str, tool_input: dict):
             soil_type=tool_input.get("soil_type"),
             distance=tool_input.get("distance", "More than 30 ft"),
             slope_ok=tool_input.get("slope_ok", True),
+            slopes_away_from_house=tool_input.get("slopes_away_from_house"),
             perc_rate=tool_input.get("perc_rate"),
             threshold_precip_rate=tool_input.get("threshold_precip_rate"),
             total_precip_yr=tool_input.get("total_precip_yr"),

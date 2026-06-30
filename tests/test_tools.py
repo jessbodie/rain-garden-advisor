@@ -174,3 +174,30 @@ def test_unknown_soil_uses_clay_factor_and_notes_it():
     types = {a["type"] for a in result["advisories"]}
     assert "unknown_soil" in types
     assert "clay_drainage" not in types  # Unknown never gets the clay advisory
+
+
+# --- slope-toward-house corrective advisory -----------------------------------
+
+# Non-blocking base inputs; only slopes_away_from_house varies.
+_SLOPE_BASE = {
+    "catchment_sa": 700, "soil_type": "Silty",
+    "distance": "More than 30 ft", "slope_ok": True,
+}
+
+
+def test_slope_toward_house_is_corrective_not_blocking():
+    result = dispatch("size_garden", {**_SLOPE_BASE, "slopes_away_from_house": False})
+    toward = [a for a in result["advisories"] if a["type"] == "slope_toward_house"]
+    assert len(toward) == 1
+    assert toward[0]["severity"] == "corrective"
+    assert result["recommended"] is True  # corrective must not flip recommended
+
+
+def test_slope_away_from_house_no_advisory():
+    result = dispatch("size_garden", {**_SLOPE_BASE, "slopes_away_from_house": True})
+    assert not any(a["type"] == "slope_toward_house" for a in result["advisories"])
+
+
+def test_slope_direction_omitted_no_advisory():
+    result = dispatch("size_garden", dict(_SLOPE_BASE))
+    assert not any(a["type"] == "slope_toward_house" for a in result["advisories"])

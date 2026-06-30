@@ -70,6 +70,43 @@ to the notebook, but the depth output carries no information above that size.
 Revisit whether depth should scale (or be dropped) for larger gardens.
 Added: 2026-06-29
 
+## [v2] Depth selection and depth/footprint coupling
+
+Current behavior:
+- Ponding depth is a *dependent output*, not an input. getDepth(area) returns
+  the geometry-table depth whose Min Area is closest to the computed area.
+- It saturates at 12" above 36 sq ft, so for essentially all real catchments
+  depth pins at 12" and is effectively constant.
+- Footprint (length / width / balanced side) is computed directly from area
+  (sqrt(area/2), etc.), independent of depth. Depth and footprint are parallel
+  outputs of area, not coupled — choosing a depth cannot currently change the
+  footprint. (NOTE: this contradicts the intuition that "depth impacts
+  dimensions"; it currently does not.)
+- The single sizing_factor bakes in an implicit depth assumption (notebook
+  averaged the 6-7" and 8" bands), which may disagree with the depth_inches the
+  geometry table reports for the same garden.
+
+Requirement gap:
+- Depth should be selectable, and should trade against footprint (deeper basin
+  -> smaller footprint for the same storage). Offer dimension options by depth.
+
+v2 implementation notes:
+- The depth-banded factors already exist in data/RainGarden-SizeFactors.csv
+  (3-5", 6-7", 8" columns). Each soil -> three (depth, factor) pairs ->
+  three (depth, area, footprint) options. Feed these instead of one factor.
+- Caveats:
+  * Depth bands exist only for the <30 ft distance regime. The >30 ft factors
+    are single values, not depth-banded — no data backing for depth-as-input on
+    far gardens. Resolve before exposing the feature there.
+  * Confirm which column/aggregation the committed sizing_factor uses, to know
+    what depth today's single number implies and whether it matches the reported
+    depth_inches.
+  * Reconcile getDepth (geometry table) against the factor's implied depth so
+    the reported depth and the footprint describe the same basin.
+- Prompt impact: when size_garden returns depth options, the system prompt's
+  results section must present them.
+
+
 **Plant-count geometry doesn't sanity-check small gardens**
 The plant-count math allots 1.33 sq ft/plant by area but ignores whether the
 plants physically fit the footprint. E.g. a 0.05-factor garden (Loamy/700 sq ft,
@@ -100,6 +137,15 @@ zip is also worth considering — hardiness zones don't change.
 Added: 2026-06-25
 
 **Note the data/RainGarden-sizeFactors.csv updated descrip and added category for Loamy**
+
+**Slope direction advisory added to size_garden**
+tools.py `size_garden` now takes `slopes_away_from_house` (boolean, optional) —
+distinct from `slope_ok` (grade/steepness ≤12%). When explicitly false (slopes
+toward the house) it emits a *corrective* (not blocking) advisory to build an
+overflow outlet away from the foundation; `recommended` stays true. True or
+omitted → no advisory. Detailed overflow-outlet *construction* guidance is
+deferred to the RAG layer (V2).
+Added: 2026-06-30
 
 ---
 
