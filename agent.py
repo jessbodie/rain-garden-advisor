@@ -40,7 +40,10 @@ except (AttributeError, ValueError):  # non-reconfigurable stream
     pass
 
 from tools import (
+    GUIDANCE_GATE_MSG,
+    GUIDANCE_PREREQS,
     PRESENT_RESULTS,
+    SEARCH_GUIDANCE,
     TOOLS,
     FatalToolError,
     build_seed,
@@ -132,6 +135,23 @@ def run_agent(messages: list, client=None) -> tuple[list, str, list]:
                     })
                     complete = True
                     continue
+                if block.name == SEARCH_GUIDANCE and not GUIDANCE_PREREQS <= {
+                    c["name"] for c in call_log
+                }:
+                    # Terminal-turn gate (§4): retrieval is reachable only once the
+                    # deterministic design exists, so its query is derived from real
+                    # advisories. Enforced at the loop boundary, not by prompt alone —
+                    # an early call gets a recoverable error, never a dispatch.
+                    gated = {"is_error": True, "message": GUIDANCE_GATE_MSG}
+                    call_log.append(
+                        {"name": block.name, "input": block.input, "output": gated}
+                    )
+                    results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(gated),
+                    })
+                    continue
                 # FatalToolError propagates to the endpoint (§7) — no longer swallowed.
                 out = dispatch(block.name, block.input)
                 call_log.append(
@@ -179,9 +199,10 @@ def _run_oracle(location, status, call_log, messages):
         f"expected zip 11209, got {location['zip_code']!r}"
 
     # Tool set: each of the four deterministic tools exactly once, free order.
-    # present_results is the terminal signal, not a deterministic tool — count it
-    # separately (below).
-    names = [c["name"] for c in call_log if c["name"] != "present_results"]
+    # present_results (terminal signal) and search_guidance (additive retrieval)
+    # are not deterministic compute tools — both are checked separately below.
+    _control = {"present_results", "search_guidance"}
+    names = [c["name"] for c in call_log if c["name"] not in _control]
     assert set(names) == {
         "get_precipitation_stats", "get_hardiness_zone", "filter_plants", "size_garden",
     }, f"unexpected tool set: {sorted(set(names))}"
@@ -231,6 +252,24 @@ def _run_oracle(location, status, call_log, messages):
         f"area {sizing['design']['area_sqft']} != 70 — sizing-input wiring error"
     assert sizing["design"]["depth_inches"] == 12, \
         f"depth {sizing['design']['depth_inches']} should saturate at 12 in"
+
+    # Additive RAG: search_guidance fired exactly once on the terminal turn (the
+    # gate lets it through only after size_garden + filter_plants), and returned
+    # cited passages for the guidance channel — never a numeric field.
+    guidance = _find_call(call_log, "search_guidance")
+    g_out = guidance["output"]
+    assert isinstance(g_out, dict) and g_out.get("passages"), \
+        f"search_guidance should return non-empty passages, got {g_out!r}"
+    for passage in g_out["passages"]:
+        assert passage.get("citation_label") and passage.get("source_url"), \
+            "each retrieved passage must carry a citation label + source url"
+    # Query is condition-derived, not a size/locale label (spec section 5).
+    query = guidance["input"]["query"].lower()
+    assert "sq ft" not in query and "square feet" not in query, \
+        f"guidance query looks size-derived, not condition-derived: {query!r}"
+    print(f"    search_guidance query: {guidance['input']['query']!r}")
+    print(f"    retrieved {len(g_out['passages'])} passages from "
+          f"{sorted({p['source_doc'] for p in g_out['passages']})}")
 
     # Termination: the model signaled completion via present_results and delivered
     # a plain-language presentation in the same turn.

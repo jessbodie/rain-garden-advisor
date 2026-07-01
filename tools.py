@@ -258,6 +258,34 @@ TOOLS = [
         },
     },
     {
+        "name": "search_guidance",
+        "description": (
+            "Retrieve short, cited passages of external how/why rain-garden guidance "
+            "(digging, berms, mulching, soil amendment, regrading, overflow outlets, "
+            "maintenance) from a curated library of government and university guides. "
+            "This is the ONLY tool that returns outside prose; it computes nothing. "
+            "Call it once, on the final turn, AFTER size_garden and filter_plants have "
+            "returned. Form the 'query' from this site's fired advisories and conditions "
+            "(e.g. clayey soil, slope too steep, close to the foundation, slopes toward "
+            "the house) — never from plot size or an urban/suburban label. The passages "
+            "are shown to the user as cited external guidance; do not restate them as "
+            "your own computed advice."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "A condition-derived search query built from the advisories that "
+                        "fired for this site (soil, slope, foundation distance, drainage)."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "present_results",
         "description": (
             "Signal that the rain-garden design is complete and deliver a brief "
@@ -283,6 +311,19 @@ TOOLS = [
 # Name of the terminal-signal tool. The agent loop intercepts this before dispatch;
 # it is never routed to a backend module (it appears in TOOLS but not in dispatch).
 PRESENT_RESULTS = "present_results"
+
+# The RAG retrieval tool. Unlike present_results it IS dispatched, but only on the
+# terminal turn: the agent loop gates it on these deterministic tools already
+# appearing in the current invocation's call_log (spec section 4, firmed to
+# call_log co-occurrence). Forming the query needs the advisories those tools
+# produced, so this ordering is also what the model naturally does.
+SEARCH_GUIDANCE = "search_guidance"
+GUIDANCE_PREREQS = frozenset({"size_garden", "filter_plants"})
+GUIDANCE_GATE_MSG = (
+    "search_guidance is only available on the final turn, after size_garden and "
+    "filter_plants have returned in this exchange. Call those first, then form the "
+    "guidance query from the advisories they produced."
+)
 
 
 # --- size_garden composition -------------------------------------------------
@@ -444,6 +485,18 @@ def _run(tool_name: str, tool_input: dict):
         )
         interior, perimeter = split_by_zone(df)
         return {"interior": _shape_plants(interior), "perimeter": _shape_plants(perimeter)}
+
+    if tool_name == "search_guidance":
+        # Import here so the ONNX runtime is pulled only when retrieval is actually
+        # used, not on every tools import. Guidance is strictly additive (spec
+        # section 0): a retrieval failure must never break the deterministic
+        # recommendation, so any error degrades to a recoverable empty result.
+        from rain_garden import retrieval
+        try:
+            passages = retrieval.search(tool_input["query"])
+        except Exception as exc:  # noqa: BLE001 — additive channel, never fatal
+            return {"is_error": True, "message": f"guidance retrieval unavailable: {exc}"}
+        return {"passages": passages}
 
     if tool_name == "size_garden":
         return _size_garden(
