@@ -100,6 +100,36 @@ def geocode_and_gate(address: str) -> dict:
     return {"ok": True, **result}
 
 
+# Opens the seeded first user turn. The HTTP layer scans incoming messages for this
+# marker to tell a seed request (absent -> geocode + gate) from a continuation
+# (present -> geocode already ran), so geocoding happens exactly once per conversation.
+LOCATION_PREAMBLE_MARKER = "[Resolved location:"
+
+
+def build_seed(location: dict, catchment_sa, slots: str | None = None) -> str:
+    """Build the seeded first user turn: location preamble + drainage area (+ slots).
+
+    ``location`` is a successful :func:`geocode_and_gate` result. The preamble opens
+    with :data:`LOCATION_PREAMBLE_MARKER` (the geocode-once discriminator) and carries
+    the resolved state/zip/lat/lon so the model never asks for them. ``catchment_sa``
+    is a user input, not a geocode field, so it rides here as its own line.
+
+    ``slots`` (optional) is free-text embedding the four site details. The oracle
+    passes all four so its run stays a one-shot ``complete``; the HTTP seed path omits
+    it and lets the model slot-fill across turns. Sole builder of the preamble so the
+    marker string lives in exactly one place.
+    """
+    preamble = (
+        f"{LOCATION_PREAMBLE_MARKER} {location['address']}, "
+        f"state {location['state']}, zip {location['zip_code']}, "
+        f"lat {location['lat']}, lon {location['lon']}]"
+    )
+    seed = f"{preamble}\n\nDrainage area: {catchment_sa} sq ft."
+    if slots:
+        seed = f"{seed}\n\n{slots}"
+    return seed
+
+
 # --- Tool schemas ------------------------------------------------------------
 
 TOOLS = [
@@ -227,7 +257,32 @@ TOOLS = [
             "required": ["catchment_sa"],
         },
     },
+    {
+        "name": "present_results",
+        "description": (
+            "Signal that the rain-garden design is complete and deliver a brief "
+            "prose wrap-up. Call this only after size_garden and filter_plants have "
+            "returned and all advisories are determined. The app shows the user the "
+            "exact dimensions, plant lists, and advisories from the tool outputs — "
+            "do not restate them here; summary is a plain-language recap only. This "
+            "is a control signal that ends the turn; it runs no calculation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "Short prose recap of the recommendation for the user.",
+                },
+            },
+            "required": ["summary"],
+        },
+    },
 ]
+
+# Name of the terminal-signal tool. The agent loop intercepts this before dispatch;
+# it is never routed to a backend module (it appears in TOOLS but not in dispatch).
+PRESENT_RESULTS = "present_results"
 
 
 # --- size_garden composition -------------------------------------------------

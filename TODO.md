@@ -70,6 +70,8 @@ to the notebook, but the depth output carries no information above that size.
 Revisit whether depth should scale (or be dropped) for larger gardens.
 Added: 2026-06-29
 
+**fastAPI tests - TODO**
+
 ## [v2] Depth selection and depth/footprint coupling
 
 Current behavior:

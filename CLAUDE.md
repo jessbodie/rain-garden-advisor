@@ -37,7 +37,7 @@ deterministic site advisories (not the LLM). `size_garden` takes two *separate* 
 does not block, `recommended` stays true). Omitting a slope input fires no advisory. ✅
 
 **LLM layer comes after all five modules are complete and tested.**
-The agent loop (in progress), function calling, and Anthropic SDK are not touched until then.
+ - `agent.py` - The agent loop, function calling, and Anthropic SDK ✅ 
 
 **RAG is scoped to unstructured prose only.**
 Construction, maintenance, and troubleshooting guidance = RAG.

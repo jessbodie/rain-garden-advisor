@@ -39,7 +39,14 @@ try:
 except (AttributeError, ValueError):  # non-reconfigurable stream
     pass
 
-from tools import TOOLS, FatalToolError, dispatch, geocode_and_gate
+from tools import (
+    PRESENT_RESULTS,
+    TOOLS,
+    FatalToolError,
+    build_seed,
+    dispatch,
+    geocode_and_gate,
+)
 from rain_garden.prompts import SYSTEM_PROMPT
 
 # Sonnet is a sensible default for tool orchestration (cost/latency vs. Opus).
@@ -48,42 +55,46 @@ MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 4096
 
 
-def _final_text(resp) -> str:
-    """Concatenate the text blocks of an assistant response."""
-    return "".join(b.text for b in resp.content if b.type == "text")
+def last_assistant_text(messages: list) -> str:
+    """Concatenate the text blocks of the most recent assistant turn.
 
-
-def run_agent(address: str, seeded_request: str) -> dict:
-    """Resolve ``address``, then run the tool loop on ``seeded_request``.
-
-    Returns a dict with the resolved ``location``, the final synthesis text
-    (``final``; ``None`` if the run stopped early), and the ``call_log`` of every
-    tool call ``{"name", "input", "output"}`` — the oracle reads the log to check
-    wiring provenance.
+    Assistant turns are stored as serialized dicts (see ``run_agent``), so this
+    reads ``b["text"]`` rather than block attributes. Returns "" if the last
+    assistant turn carried no text (e.g. a bare tool_use turn).
     """
-    # --- Pre-step: geocode + gate (deterministic, before any model call) ------
-    location = geocode_and_gate(address)
-    if not location.get("ok"):
-        # Out of region / unfindable — refuse without ever entering the loop.
-        print(location["message"])
-        return {"location": location, "final": None, "call_log": []}
+    for msg in reversed(messages):
+        if msg["role"] != "assistant":
+            continue
+        content = msg["content"]
+        if isinstance(content, str):
+            return content
+        return "".join(
+            b.get("text", "") for b in content if b.get("type") == "text"
+        )
+    return ""
 
-    # Inject the resolved location as a preamble on the first user turn — never
-    # mutate SYSTEM_PROMPT (it's verbatim-verified). state and zip feed
-    # filter_plants / get_hardiness_zone; the model reads them here.
-    preamble = (
-        f"[Resolved location: {location['address']}, "
-        f"state {location['state']}, zip {location['zip_code']}, "
-        f"lat {location['lat']}, lon {location['lon']}]"
-    )
-    messages = [{"role": "user", "content": f"{preamble}\n\n{seeded_request}"}]
+
+def run_agent(messages: list, client=None) -> tuple[list, str, list]:
+    """Drive the tool loop over ``messages`` until it pauses or completes.
+
+    ``messages`` already carries the location preamble (built by :func:`build_seed`)
+    on the seed turn and every prior turn on a continuation — this function never
+    geocodes. Returns ``(messages, status, call_log)``:
+
+    * ``status == "awaiting_user"`` — the model asked a question (``end_turn`` with
+      trailing text and no ``present_results``); the caller resumes by appending the
+      user's answer and calling again.
+    * ``status == "complete"`` — the model called ``present_results``; the design is
+      final. The summary rides in the ``present_results`` ``call_log`` entry.
+    * ``status == "error"`` — truncation or an unhandled stop reason.
+
+    ``call_log`` records every tool call this invocation made
+    (``{"name", "input", "output"}``), including the ``present_results`` signal
+    (``output=None``). A :class:`FatalToolError` propagates to the caller unswallowed.
+    """
+    if client is None:
+        client = anthropic.Anthropic()
     call_log: list[dict] = []
-
-    # ANTHROPIC_API_KEY lives in .env; load it before the client reads the env
-    # (usecwd=True mirrors hardiness.py — robust to how the script is launched).
-    from dotenv import find_dotenv, load_dotenv
-    load_dotenv(find_dotenv(usecwd=True))
-    client = anthropic.Anthropic()
 
     while True:
         resp = client.messages.create(
@@ -93,19 +104,36 @@ def run_agent(address: str, seeded_request: str) -> dict:
             tools=TOOLS,
             messages=messages,
         )
-        messages.append({"role": "assistant", "content": resp.content})
+        # Serialize assistant blocks to plain dicts so the transcript round-trips
+        # through JSON for the client-stateless transport. exclude_none drops
+        # optional metadata (citations, cache_control) the API rejects inbound.
+        messages.append({
+            "role": "assistant",
+            "content": [b.model_dump(exclude_none=True) for b in resp.content],
+        })
 
         if resp.stop_reason == "tool_use":
             results = []
+            complete = False
             for block in resp.content:  # ALL blocks — parallel calls are common
                 if block.type != "tool_use":
                     continue
-                try:
-                    out = dispatch(block.name, block.input)
-                except FatalToolError as exc:  # specific catch — no bare except
-                    print(f"FATAL: {exc}")
-                    return {"location": location, "final": None,
-                            "call_log": call_log, "fatal": True}
+                if block.name == PRESENT_RESULTS:
+                    # Terminal control signal — intercepted, never dispatched. Record
+                    # it in call_log (summary lives here) and acknowledge so the
+                    # transcript stays API-valid (every tool_use needs a tool_result).
+                    call_log.append(
+                        {"name": block.name, "input": block.input, "output": None}
+                    )
+                    results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps({"acknowledged": True}),
+                    })
+                    complete = True
+                    continue
+                # FatalToolError propagates to the endpoint (§7) — no longer swallowed.
+                out = dispatch(block.name, block.input)
                 call_log.append(
                     {"name": block.name, "input": block.input, "output": out}
                 )
@@ -117,21 +145,20 @@ def run_agent(address: str, seeded_request: str) -> dict:
                     "content": json.dumps(out, allow_nan=False),
                 })
             messages.append({"role": "user", "content": results})
+            if complete:
+                return messages, "complete", call_log
             continue
 
         if resp.stop_reason == "end_turn":
-            final = _final_text(resp)
-            print(final)
-            return {"location": location, "final": final, "call_log": call_log}
+            # Trailing assistant text, no present_results — the model is asking a
+            # slot question and waiting on the user.
+            return messages, "awaiting_user", call_log
 
         if resp.stop_reason == "max_tokens":
-            print("WARNING: response truncated (max_tokens). Stopping.")
-            return {"location": location, "final": None,
-                    "call_log": call_log, "truncated": True}
+            return messages, "error", call_log
 
         # Any other stop_reason: stop rather than fall through silently.
-        print(f"WARNING: unhandled stop_reason {resp.stop_reason!r}. Stopping.")
-        return {"location": location, "final": None, "call_log": call_log}
+        return messages, "error", call_log
 
 
 # --- Acceptance oracle (Section 8) -------------------------------------------
@@ -143,19 +170,18 @@ def _find_call(call_log, name):
     return hits[0]
 
 
-def _run_oracle(result):
+def _run_oracle(location, status, call_log, messages):
     """Structural / wiring / plausibility checks on a finished Brooklyn run."""
-    location = result["location"]
-    call_log = result["call_log"]
-
     # Pre-step: resolved NY / 11209 and passed the gate.
     assert location["ok"] is True, "Brooklyn address should pass the lower-48 gate"
     assert location["state"] == "NY", f"expected state NY, got {location['state']!r}"
     assert location["zip_code"] == "11209", \
         f"expected zip 11209, got {location['zip_code']!r}"
 
-    # Tool set: each of the four, exactly once, free order.
-    names = [c["name"] for c in call_log]
+    # Tool set: each of the four deterministic tools exactly once, free order.
+    # present_results is the terminal signal, not a deterministic tool — count it
+    # separately (below).
+    names = [c["name"] for c in call_log if c["name"] != "present_results"]
     assert set(names) == {
         "get_precipitation_stats", "get_hardiness_zone", "filter_plants", "size_garden",
     }, f"unexpected tool set: {sorted(set(names))}"
@@ -206,23 +232,40 @@ def _run_oracle(result):
     assert sizing["design"]["depth_inches"] == 12, \
         f"depth {sizing['design']['depth_inches']} should saturate at 12 in"
 
-    # Termination: synthesis exists (loop exited on end_turn).
-    assert result.get("final"), "expected final synthesis text on end_turn"
+    # Termination: the model signaled completion via present_results and delivered
+    # a plain-language presentation in the same turn.
+    assert status == "complete", f"expected status 'complete', got {status!r}"
+    present = _find_call(call_log, "present_results")
+    assert present["input"].get("summary"), \
+        "present_results should carry a non-empty prose summary"
+    assert last_assistant_text(messages), \
+        "expected a plain-language presentation in the final assistant turn"
 
     print("\n--- ORACLE: all structural / wiring / plausibility checks passed ---")
 
 
 if __name__ == "__main__":
-    # Fully-seeded Brooklyn smoke test (Section 7): every detail the model would
-    # otherwise slot-fill is in the seed, so no follow-up questions are needed.
-    address = "97 80th St. Brooklyn NY"
-    seeded_request = (
-        "I'd like to plan a rain garden in my yard. About 700 square feet of roof "
-        "drains toward the spot. It's more than 30 feet from the house. The ground "
-        "is flat there — well under a 12% grade. It gets partial sun. I haven't "
-        "tested my soil and honestly couldn't tell you what type it is. "
-        "Please size the garden and recommend plants."
-    )
+    # Fully-seeded Brooklyn smoke test (Section 7): every site detail is embedded in
+    # the seed so the model needs no follow-up questions and runs one-shot to a
+    # present_results completion. catchment_sa rides in build_seed's drainage line,
+    # so the slot text below deliberately omits a second area figure.
+    from dotenv import find_dotenv, load_dotenv
+    load_dotenv(find_dotenv(usecwd=True))  # oracle is its own entry point
 
-    result = run_agent(address, seeded_request)
-    _run_oracle(result)
+    address = "97 80th St. Brooklyn NY"
+    location = geocode_and_gate(address)
+    if not location.get("ok"):
+        print(location["message"])
+        sys.exit(1)
+
+    slots = (
+        "I'd like to plan a rain garden in my yard. It's more than 30 feet from the "
+        "house. The ground is flat there — well under a 12% grade. It gets partial "
+        "sun. I haven't tested my soil and honestly couldn't tell you what type it "
+        "is. Please size the garden and recommend plants."
+    )
+    messages = [{"role": "user", "content": build_seed(location, 700, slots=slots)}]
+
+    messages, status, call_log = run_agent(messages)
+    print(last_assistant_text(messages))
+    _run_oracle(location, status, call_log, messages)
