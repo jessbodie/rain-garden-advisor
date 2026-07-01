@@ -36,8 +36,26 @@ deterministic site advisories (not the LLM). `size_garden` takes two *separate* 
 (direction; false → a *corrective* advisory to build an overflow outlet away from the foundation —
 does not block, `recommended` stays true). Omitting a slope input fires no advisory. ✅
 
-**LLM layer comes after all five modules are complete and tested.**
- - `agent.py` - The agent loop, function calling, and Anthropic SDK ✅ 
+**LLM layer sits on top of the completed deterministic core.**
+- `agent.py` — the agent loop over the Anthropic Messages API. ✅
+  `run_agent(messages, client=None) -> (messages, status, call_log)` is a
+  messages-based loop: `status` ∈ `awaiting_user` | `complete` | `error`, and
+  `call_log` records every tool call `{name, input, output}`. Assistant turns
+  are serialized to plain dicts (`model_dump(exclude_none=True)`) so the
+  transcript round-trips through JSON — a hard dependency of the client-stateless
+  transport, not a convenience (`exclude_none` drops citations/cache_control the
+  API rejects inbound). `last_assistant_text` therefore reads `b["text"]` on
+  dicts, not block attributes.
+- **Completion contract:** `present_results` is a terminal control signal, not a
+  calculation. The loop intercepts it before dispatch, records it in `call_log`
+  (with `output=None`; the summary rides in its input), and returns
+  `status="complete"`. It appears in `TOOLS` but is never routed through `dispatch`.
+- `app.py` — FastAPI `POST /chat`, **client-stateless**. ✅ The `messages`
+  transcript *is* the conversation state: the browser holds it and resends it
+  each turn; the server runs one `run_agent` pass per request. No session store.
+  Seed vs. continue is discriminated by `LOCATION_PREAMBLE_MARKER` in `messages`,
+  so geocoding runs exactly once per conversation.
+- `prompts.py` — `SYSTEM_PROMPT`, passed verbatim as the API `system` parameter.
 
 **RAG is scoped to unstructured prose only.**
 Construction, maintenance, and troubleshooting guidance = RAG.
@@ -92,11 +110,12 @@ in TODO.md.
 
 ## What is explicitly out of scope right now
 
-- Any LLM / Anthropic SDK code
-- FastAPI endpoints (added after all five modules pass)
 - Next.js or any frontend code
 - Precipitation charts and dashboard visualizations (V2 — see TODO.md)
 - Porting any logic to JavaScript
+
+(The LLM agent loop and the FastAPI `POST /chat` endpoint are now built —
+see the Architecture section. The frontend is still the last piece.)
 
 ---
 
