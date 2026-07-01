@@ -16,18 +16,32 @@ dependencies = [
     "anthropic",
     "fastapi",
     "uvicorn[standard]",
+    # search_guidance RAG runtime: local ONNX embedder (HALT 1 choice A). No torch,
+    # no huggingface_hub on the hot path — the model ships as package data.
+    "onnxruntime",
+    "tokenizers",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
+    # Build-time only: scripts/build_rag_index.py reads the corpus PDFs. Not
+    # imported on the request path.
+    "pypdf",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-rain_garden = ["data/*.csv"]
+# Ships the deterministic CSVs plus the RAG artifacts (row-aligned chunk sidecar,
+# embeddings, and the vendored ONNX embedding model + tokenizer).
+rain_garden = [
+    "data/*.csv",
+    "data/*.jsonl",
+    "data/*.npy",
+    "data/embedding_model/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,51 @@
+{
+  "_comment": "Corpus manifest for the search_guidance RAG layer. Unstructured why/how guidance ONLY (spec section 1). Sizing/plant/hardiness/perc tables are deterministic and must NOT be ingested. 'path' is relative to the repo root. 'kind' is pdf|text. 'license' notes provenance; non-gov sources carry short cited snippets only.",
+  "sources": [
+    {
+      "source_doc": "doee_howto",
+      "kind": "pdf",
+      "path": "data/raw/RaingardenHow2HomeownerUWExtension_doee_howto.pdf",
+      "source_url": "https://doee.dc.gov/sites/default/files/dc/sites/ddoe/publication/attachments/RaingardenHow2HomeownerUWExtension.pdf",
+      "citation_label": "DC DOEE, Rain Garden How-To Manual for Homeowners",
+      "license": "government (Washington DC Dept. of Energy & Environment)",
+      "exclude_pages": [18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32],
+      "exclude_reason": "planting-design captions, plant-list tables, and credits (keep p30 special-locations prose)"
+    },
+    {
+      "source_doc": "five_counties",
+      "kind": "pdf",
+      "path": "data/raw/04_rain_garden_5counties.pdf",
+      "source_url": "https://www.5counties.org/docs/lu_planning/04_rain_garden.pdf",
+      "citation_label": "Five Counties Salmonid Conservation Program, Build a Rain Garden",
+      "license": "public conservation program guide",
+      "exclude_pages": [5, 15],
+      "exclude_reason": "p5 sizing-factor/geometry table (deterministic-owned); p15 photo credits"
+    },
+    {
+      "source_doc": "oregon_guide",
+      "kind": "pdf",
+      "path": "data/raw/h10001-lo_oregon_guide.pdf",
+      "source_url": "https://seagrant.oregonstate.edu/sites/seagrant.oregonstate.edu/files/h10001-lo.pdf",
+      "citation_label": "Oregon Rain Garden Guide (Oregon Sea Grant / Oregon State University)",
+      "license": "university / Sea Grant",
+      "exclude_pages": [3, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42],
+      "exclude_reason": "p3 table of contents; p28-42 plant-layout palettes and plant-list tables"
+    },
+    {
+      "source_doc": "epa_soak_up_the_rain",
+      "kind": "text",
+      "path": "data/corpus/epa_soak_up_the_rain.txt",
+      "source_url": "https://www.epa.gov/soakuptherain/soak-rain-whats-problem",
+      "citation_label": "EPA, Soak Up the Rain: What's the Problem",
+      "license": "government (US EPA)"
+    },
+    {
+      "source_doc": "missouri_botanical",
+      "kind": "text",
+      "path": "data/corpus/missouri_botanical.txt",
+      "source_url": "https://www.missouribotanicalgarden.org/sustainability/sustainability/sustainable-solutions-for-you/rainscaping-guide/design-and-build-a-rain-garden/determine-rain-garden-size-and-depth",
+      "citation_label": "Missouri Botanical Garden, Rainscaping Guide",
+      "license": "NON-GOVERNMENT — curated to a short why/how snippet (constrained-site design alternatives). Sizing/depth prose from the source page was excluded per spec section 1 and to avoid contradicting the deterministic sizing engine. Full source paste kept at data/corpus/missouri_botanical_raw.txt (not ingested)."
+    }
+  ]
+}
