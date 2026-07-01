@@ -55,7 +55,7 @@ class ChatResponse(BaseModel):
     status: str  # awaiting_user | complete | out_of_region | error
     messages: list = []
     assistant_message: str | None = None
-    results: dict | None = None
+    results: dict | None = None  # includes the disjoint "guidance" channel on complete
     detail: str | None = None
 
 
@@ -86,6 +86,8 @@ def _assemble_results(call_log: list) -> dict:
     results: dict = {
         "summary": present["input"].get("summary") if present else None,
     }
+    # Numeric/structured fields — sourced ONLY from the deterministic compute-tool
+    # entries (spec section 0). No guidance entry is ever read into these.
     sizing = latest.get("size_garden")
     if sizing:
         results["sizing"] = sizing["output"]
@@ -93,6 +95,14 @@ def _assemble_results(call_log: list) -> dict:
     plants = latest.get("filter_plants")
     if plants:
         results["plants"] = plants["output"]
+    # Guidance channel — sourced ONLY from the search_guidance entry, never a
+    # numeric field. The two read paths are disjoint by construction: this is the
+    # structural enforcement of the additive-retrieval invariant. A missing or
+    # errored ({"is_error": ...}) entry yields an empty channel, keeping guidance
+    # strictly optional.
+    guidance = latest.get("search_guidance")
+    output = guidance.get("output") if guidance else None
+    results["guidance"] = output.get("passages", []) if isinstance(output, dict) else []
     return results
 
 
