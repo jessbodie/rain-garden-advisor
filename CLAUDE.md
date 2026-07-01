@@ -57,10 +57,25 @@ does not block, `recommended` stays true). Omitting a slope input fires no advis
   so geocoding runs exactly once per conversation.
 - `prompts.py` — `SYSTEM_PROMPT`, passed verbatim as the API `system` parameter.
 
-**RAG is scoped to unstructured prose only.**
-Construction, maintenance, and troubleshooting guidance = RAG.
-Plant selection = deterministic filter in plants.py. Do not apply RAG to
-structured data.
+**RAG is scoped to unstructured prose only — and it is strictly additive.** ✅
+Construction, maintenance, and troubleshooting guidance = RAG. Plant selection =
+deterministic filter in plants.py. Do not apply RAG to structured data.
+- `search_guidance` (`tools.py`) is the sixth tool: it retrieves short, cited
+  why/how passages and computes nothing. It IS dispatched (unlike
+  `present_results`), but only on the terminal turn — `agent.py` gates it on
+  `size_garden` + `filter_plants` already appearing in the current `call_log`, so
+  its query is derived from the fired advisories, never plot size.
+- `src/rain_garden/retrieval.py` — the `Embedder` seam, a local ONNX embedder
+  (`OnnxEmbedder`, bge-small, shipped as package data — no key, no runtime
+  download), and brute-force cosine `search()` over a shipped `.npy` index. The
+  SAME `OnnxEmbedder` builds the index and embeds queries, so there is one
+  embedding space by construction.
+- The guidance channel is **structurally disjoint** from numeric results:
+  `app.py` reads it ONLY from the `search_guidance` `call_log` entry; numeric
+  fields ONLY from the compute-tool entries. Retrieved prose never feeds a tool
+  input or a computed value.
+- Corpus + index are built offline by `scripts/build_rag_index.py` and shipped;
+  there is no runtime index build (mirrors the CSV pattern).
 
 **Frontend (Next.js) is last.**
 A thin chat UI layer, added only after the backend and agent loop work.
@@ -95,6 +110,17 @@ in TODO.md.
 - `src/rain_garden/data/nwpl_usda_merged.csv` — National Wetlands Plant List (NWPL) merged and enriched with USDA PLANTS dataset
 - `src/rain_garden/data/NWPL_RegionStateMapping.csv` — Maps NWPL regions to U.S. States
 
+RAG artifacts (all shipped as package data, built offline — never at runtime):
+- `src/rain_garden/data/guidance_chunks.jsonl` — 160 row-aligned why/how prose
+  chunks (`source_doc`, `source_url`, `citation_label`, `page`)
+- `src/rain_garden/data/guidance_embeddings.npy` — L2-normalized chunk embeddings
+  (160 × 384), row-aligned to the sidecar; the brute-force cosine index
+- `src/rain_garden/data/embedding_model/` — vendored bge-small ONNX model +
+  tokenizer; the `.onnx` is tracked with **git-lfs** (see `.gitattributes`)
+- `data/corpus/` — offline build inputs: `manifest.json` (sources + per-PDF page
+  exclusions) and the EPA / Missouri Botanical text snippets. Source guidance
+  PDFs live in the gitignored `data/raw/`.
+
 ---
 
 ## Testing conventions
@@ -114,8 +140,9 @@ in TODO.md.
 - Precipitation charts and dashboard visualizations (V2 — see TODO.md)
 - Porting any logic to JavaScript
 
-(The LLM agent loop and the FastAPI `POST /chat` endpoint are now built —
-see the Architecture section. The frontend is still the last piece.)
+(The LLM agent loop, the FastAPI `POST /chat` endpoint, and the search_guidance
+RAG layer are now built — see the Architecture section. The frontend is still the
+last piece.)
 
 ---
 

@@ -31,6 +31,28 @@ Added: 2026-06-25
 
 ## Known Issues
 
+## RAG prose-provenance guard (revisit at frontend stage)
+
+Problem: anti-conflation between retrieved guidance and computed advice
+currently rests ONLY on the prompt instruction ("frame, don't retype").
+Live terminal-turn run showed the model reproducing retrieved passages
+inline despite that instruction. The numeric invariant is structural and
+held; this prose guard is not — it's prompt-only and demonstrated unreliable.
+
+Not a correctness bug. Latent until the frontend renders both the structured
+`guidance` channel and model prose in one view (duplication + conflation
+become user-visible then).
+
+Fix direction (structural, NOT a prompt tweak):
+- Frontend/app.py renders the guidance channel (cited passages + source).
+- Model references guidance without reproducing it.
+- If the model reproduces anyway, the render layer is the guard: display the
+  structured channel, don't render model-reproduced guidance prose.
+- Goal: make reproduction harmless by construction, mirroring how the disjoint
+  call_log paths made the numeric invariant structural.
+
+Do this as the FIRST task of the frontend stage, after commit. Not before.
+
 **Negative interior area on tiny gardens**
 The notebook's plant-count formula produces a negative interior area when the
 rain garden is very small (roughly < 5 sq ft). `sizing.py` now guards against
