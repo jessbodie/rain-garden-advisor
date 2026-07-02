@@ -13,7 +13,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-not-used")
 
 import agent  # noqa: E402
 import app  # noqa: E402
-from tools import SEARCH_GUIDANCE  # noqa: E402
+from tools import SEARCH_GUIDANCE, dispatch  # noqa: E402
 
 
 # --- fake Anthropic response scaffolding -------------------------------------
@@ -105,49 +105,160 @@ def test_search_guidance_dispatched_after_compute(monkeypatch):
     assert entry["output"] == {"passages": passages}   # dispatched, not gated
 
 
-# --- disjoint guidance channel in assembly (spec section 0) ------------------
+# --- results assembly: token-injected summary + guidance dropped -------------
+# Numbers are constructed test inputs, NOT oracle values — assertions check the
+# substitution/guard machinery, never that a particular area is "correct".
 
-def test_assemble_results_populates_disjoint_channels():
+# Canonical size_garden design. drainage/gallons default null (the common
+# no-perc-rate / soil-unknown run); individual tests override as needed.
+_DESIGN = {
+    "sizing_factor": 0.10,
+    "area_sqft": 70,
+    "elongated_width_ft": 6,
+    "elongated_length_ft": 12,
+    "balanced_side_ft": 8,
+    "depth_inches": 12,
+    "interior_plant_count": 11,
+    "perimeter_plant_count": 9,
+    "drainage_time_hours": None,
+    "gallons_per_year": None,
+}
+
+
+def _sizing_entry(design=None, catchment=700, advisories=None):
+    d = dict(_DESIGN)
+    if design:
+        d.update(design)
+    return {
+        "name": "size_garden",
+        "input": {"catchment_sa": catchment},
+        "output": {
+            "recommended": True,
+            "design": d,
+            "advisories": advisories if advisories is not None else [
+                {"type": "utilities", "severity": "informational", "message": "m"},
+            ],
+        },
+    }
+
+
+def _present(summary):
+    return {"name": "present_results", "input": {"summary": summary}, "output": None}
+
+
+def test_assemble_populates_fields_and_resolves_summary():
     call_log = [
-        {"name": "size_garden", "input": {}, "output": {
-            "design": {"area_sqft": 70}, "recommended": True,
-            "advisories": [{"type": "clay_drainage", "severity": "corrective", "message": "m"}],
-        }},
+        _sizing_entry(advisories=[
+            {"type": "clay_drainage", "severity": "corrective", "message": "m"}]),
         {"name": "filter_plants", "input": {}, "output": {
             "interior": [{"common_name": "Blue Flag"}], "perimeter": [],
         }},
-        {"name": "search_guidance", "input": {"query": "clay"}, "output": {"passages": [
-            {"text": "Amend clay with compost.", "citation_label": "Oregon",
-             "source_url": "u", "page": 11, "score": 0.82},
-        ]}},
-        {"name": "present_results", "input": {"summary": "done"}, "output": None},
+        {"name": "search_guidance", "input": {"query": "clay"},
+         "output": {"passages": [{"citation_label": "Oregon"}]}},
+        _present("A {area_sqft} sq ft garden with {interior_plant_count} center plants."),
     ]
     res = app._assemble_results(call_log)
-    assert res["summary"] == "done"
+    assert res["summary"] == "A 70 sq ft garden with 11 center plants."
     assert res["sizing"]["design"]["area_sqft"] == 70
     assert res["advisories"][0]["type"] == "clay_drainage"
     assert res["plants"]["interior"][0]["common_name"] == "Blue Flag"
-    assert res["guidance"][0]["citation_label"] == "Oregon"
+    assert "guidance" not in res  # guidance is no longer a results field
 
 
-def test_guidance_entry_never_reaches_numeric_fields():
-    """A search_guidance entry whose payload mimics numeric fields cannot populate
-    them: numeric fields are read ONLY from their own compute-tool entries."""
-    call_log = [{
-        "name": "search_guidance", "input": {"query": "x"},
-        "output": {"passages": [], "sizing": {"area_sqft": 999},
-                   "advisories": [{"type": "spoofed"}]},
-    }]
+def test_summary_has_no_bare_dimension_digits():
+    """Every digit in the rendered summary arrived as a resolved token; a raw
+    summary that is digit-free stays digit-free only via substitution."""
+    subs = app._substitutions(_sizing_entry())
+    raw = ("{area_sqft} sq ft, {depth_inches} in deep, "
+           "{interior_plant_count}/{perimeter_plant_count} plants.")
+    assert not any(ch.isdigit() for ch in raw)  # model wrote zero bare digits
+    resolved = app._resolve_summary(raw, subs)
+    assert resolved == "70 sq ft, 12 in deep, 11/9 plants."
+
+
+def test_referenced_tokens_all_resolve_non_null():
+    subs = app._substitutions(_sizing_entry(
+        design={"drainage_time_hours": 30, "gallons_per_year": 12000}))
+    raw = ("{area_sqft} sq ft; captures {gallons_per_year} gal/yr from "
+           "{catchment_sqft} sq ft; drains in {drainage_time_hours} h.")
+    resolved = app._resolve_summary(raw, subs)
+    # No fallback: all referenced tokens were present and non-null.
+    assert resolved == "70 sq ft; captures 12000 gal/yr from 700 sq ft; drains in 30 h."
+
+
+def test_substitution_dict_is_curated_allowlist_not_design_splat():
+    subs = app._substitutions(_sizing_entry(catchment=850))
+    # catchment comes from the INPUT, under the token name catchment_sqft.
+    assert subs["catchment_sqft"] == 850
+    # A design-only key that is NOT an authored token must not be substitutable.
+    assert "sizing_factor" not in subs
+    # Referencing it therefore fails the allow-list check -> deterministic fallback.
+    resolved = app._resolve_summary("factor {sizing_factor}", subs)
+    assert resolved == app._fallback_summary(subs)
+
+
+def test_advisories_byte_identical_to_tool_output():
+    advisories = [{"type": "slope", "severity": "blocking", "message": "x"}]
+    entry = _sizing_entry(advisories=advisories)
+    res = app._assemble_results([entry, _present("ok")])
+    assert res["advisories"] == advisories                    # unchanged value
+    assert res["advisories"] is entry["output"]["advisories"]  # same object, no copy/edit
+
+
+def test_incidental_and_untokenized_digits_pass_through():
+    """No digit guard: bare digits the model writes are left as-is. Only unknown or
+    null tokens route to the fallback."""
+    subs = app._substitutions(_sizing_entry())
+    # An un-tokenized dimension digit is no longer policed -> passes through.
+    assert app._resolve_summary("Your garden is 70 sq ft.", subs) == "Your garden is 70 sq ft."
+    # Valid tokens resolve while incidental non-dimension digits (zone, 811) survive.
+    resolved = app._resolve_summary("A {area_sqft} sq ft garden, Zone 7b, call 811.", subs)
+    assert resolved == "A 70 sq ft garden, Zone 7b, call 811."
+
+
+def test_null_token_routes_to_fallback_and_omits_clause():
+    subs = app._substitutions(_sizing_entry())  # drainage_time_hours is None
+    resolved = app._resolve_summary("It drains in {drainage_time_hours} hours.", subs)
+    fallback = app._fallback_summary(subs)
+    assert resolved == fallback
+    # The fallback omits the drainage clause entirely when the value is null.
+    assert "drains in about" not in fallback
+    # ...but includes optional clauses whose values ARE present.
+    subs2 = app._substitutions(_sizing_entry(design={"drainage_time_hours": 30}))
+    assert "drains in about 30 hours" in app._fallback_summary(subs2)
+
+
+def test_prompt_slip_without_sizing_passes_summary_through():
+    """present_results but no size_garden this turn: no design to substitute against,
+    so the raw summary passes through rather than raising."""
+    res = app._assemble_results([_present("done")])
+    assert res["summary"] == "done"
+    assert "sizing" not in res and "guidance" not in res
+
+
+# --- guidance retrieval failure is non-fatal (guarantee had no other coverage) --
+
+def test_guidance_retrieval_error_is_non_fatal(monkeypatch):
+    """A raising retrieval degrades to a recoverable {is_error}, never propagating —
+    the 'retrieval failure never breaks the deterministic recommendation' invariant."""
+    def boom(query, **kwargs):
+        raise RuntimeError("onnx runtime exploded")
+    monkeypatch.setattr("rain_garden.retrieval.search", boom)
+    out = dispatch(SEARCH_GUIDANCE, {"query": "clay"})
+    assert out["is_error"] is True
+    assert "onnx runtime exploded" in out["message"]
+
+
+def test_assemble_tolerates_errored_guidance_entry():
+    """An errored search_guidance entry in the log doesn't break assembly: the
+    deterministic fields still populate and there is no guidance field to poison."""
+    call_log = [
+        _sizing_entry(),
+        {"name": "search_guidance", "input": {"query": "x"},
+         "output": {"is_error": True, "message": "boom"}},
+        _present("Set at {area_sqft} sq ft."),
+    ]
     res = app._assemble_results(call_log)
-    assert "sizing" not in res       # no size_garden entry -> no sizing field
-    assert "plants" not in res
-    assert "advisories" not in res   # advisories come only from size_garden
-    assert res["guidance"] == []     # only the (empty) passages are read
-
-
-def test_errored_guidance_yields_empty_channel():
-    call_log = [{
-        "name": "search_guidance", "input": {"query": "x"},
-        "output": {"is_error": True, "message": "boom"},
-    }]
-    assert app._assemble_results(call_log)["guidance"] == []
+    assert "guidance" not in res
+    assert res["sizing"]["design"]["area_sqft"] == 70
+    assert res["summary"] == "Set at 70 sq ft."
