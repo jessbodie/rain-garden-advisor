@@ -70,10 +70,20 @@ deterministic filter in plants.py. Do not apply RAG to structured data.
   download), and brute-force cosine `search()` over a shipped `.npy` index. The
   SAME `OnnxEmbedder` builds the index and embeds queries, so there is one
   embedding space by construction.
-- The guidance channel is **structurally disjoint** from numeric results:
-  `app.py` reads it ONLY from the `search_guidance` `call_log` entry; numeric
-  fields ONLY from the compute-tool entries. Retrieved prose never feeds a tool
-  input or a computed value.
+- Retrieved guidance is **narrative fuel, not a displayed channel.** The model
+  paraphrases the passages into its `present_results.summary` prose; guidance is
+  **dropped from the `/chat` response** — `_assemble_results` no longer reads it.
+  The `search_guidance` `call_log` entry is retained server-side (traceability,
+  About-section sourcing), but retrieved prose never feeds a tool input or a
+  computed value, and never surfaces as its own results field.
+- Numbers in the summary are **token-injected deterministically.** The model
+  authors the summary with named `{tokens}` (`{area_sqft}`, `{gallons_per_year}`,
+  `{drainage_time_hours}`, …); `_assemble_results` substitutes the exact
+  compute-tool values, so no *computed* garden value originates in model prose. A
+  summary that references an unknown or null-valued token falls back to a fully
+  code-authored template. Incidental non-dimension digits (a hardiness zone like
+  "7b", the 811 dig line) are left as written — there is no digit scan. Advisories
+  pass through byte-identical from the `size_garden` output — the AI never modifies them.
 - Corpus + index are built offline by `scripts/build_rag_index.py` and shipped;
   there is no runtime index build (mirrors the CSV pattern).
 

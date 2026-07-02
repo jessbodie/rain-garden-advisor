@@ -31,27 +31,13 @@ Added: 2026-06-25
 
 ## Known Issues
 
-## RAG prose-provenance guard (revisit at frontend stage)
 
-Problem: anti-conflation between retrieved guidance and computed advice
-currently rests ONLY on the prompt instruction ("frame, don't retype").
-Live terminal-turn run showed the model reproducing retrieved passages
-inline despite that instruction. The numeric invariant is structural and
-held; this prose guard is not — it's prompt-only and demonstrated unreliable.
-
-Not a correctness bug. Latent until the frontend renders both the structured
-`guidance` channel and model prose in one view (duplication + conflation
-become user-visible then).
-
-Fix direction (structural, NOT a prompt tweak):
-- Frontend/app.py renders the guidance channel (cited passages + source).
-- Model references guidance without reproducing it.
-- If the model reproduces anyway, the render layer is the guard: display the
-  structured channel, don't render model-reproduced guidance prose.
-- Goal: make reproduction harmless by construction, mirroring how the disjoint
-  call_log paths made the numeric invariant structural.
-
-Do this as the FIRST task of the frontend stage, after commit. Not before.
+**gallons_per_year computes from catchment × total_precip_yr × constant — no perc/soil dependency**
+gallons_per_year should compute from catchment × total_precip_yr × constant, with
+no perc/soil dependency; it is currently null when soil is unknown. Decouple it from
+the perc-rate branch. Chat-lane spec item, not frontend. (Until fixed, the summary's
+{gallons_per_year} clause is simply omitted on null runs, per the reference-only-
+present-values rule.)
 
 **Negative interior area on tiny gardens**
 The notebook's plant-count formula produces a negative interior area when the
@@ -184,3 +170,7 @@ Added: 2026-06-25
 Currently, states that span two NWPL regions (e.g. Virginia spans EMP and AGCP) are handled by querying both regional columns and returning a plant if it qualifies in either. This is a reasonable approximation for v1.
 A more accurate approach: the Army Corps of Engineers publishes NWPL regional boundaries as shapefiles, using the same boundaries as the Regional Supplements to the Corps Wetland Delineation Manual. Given the user's lat/lon (already available from geocode.py), do a spatial point-in-polygon lookup against those shapefiles to determine the exact NWPL region, then query only that column. This eliminates the edge case where a plant is wetland-adapted in one part of a split state but not another.
 Libraries: geopandas, shapely. Shapefiles available at: https://wetland-plants.usace.army.mil
+
+
+**tightening the prompt (spell out "days" etc.)**
+TODO -- for the cases when numbers trip the auto-template of the AI summary response
