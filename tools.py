@@ -290,10 +290,10 @@ TOOLS = [
         "description": (
             "Signal that the rain-garden design is complete and deliver a brief "
             "prose wrap-up. Call this only after size_garden and filter_plants have "
-            "returned and all advisories are determined. The app shows the user the "
-            "exact dimensions, plant lists, and advisories from the tool outputs — "
-            "do not restate them here; summary is a plain-language recap only. This "
-            "is a control signal that ends the turn; it runs no calculation."
+            "returned and all advisories are determined. Write `summary` per the "
+            "SIGNALING COMPLETION rules in the system prompt: express every computed "
+            "garden value as a named {token} (e.g. {area_sqft}), never a literal "
+            "digit. This is a control signal that ends the turn; it runs no calculation."
         ),
         "input_schema": {
             "type": "object",
