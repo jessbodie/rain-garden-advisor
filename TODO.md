@@ -150,6 +150,11 @@ Added: 2026-06-25
 ESCALATED 2026-07-01: the agent layer is now live (dispatch → get_hardiness_zone)
 and still no throttle exists. Now an outstanding gap, not future work.
 
+**RAPIDAPI_KEY is currently a hard dependency (a missing key crashes the run)** 
+A rain garden design arguably could still be useful without the plant list. Make the app more resilient, make the hardiness lookup degrade gracefully (like precipitation) 
+
+**Plant lists are capped at 15 each.**
+TODO
 
 ---
 
