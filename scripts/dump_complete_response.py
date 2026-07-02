@@ -142,10 +142,14 @@ app._client = FakeClient([
             "Here's your rain garden plan for Brooklyn (zone 7b). Based on ~700 sq "
             "ft of drainage and unknown soil, I've sized a 70 sq ft basin and "
             "picked NY-hardy plants for the wet interior and drier perimeter.")),
+        # Summary is authored with tokens (no bare digits): _assemble_results
+        # injects the deterministic values, exercising the happy token path rather
+        # than the digit-guard fallback.
         tu("present_results", {"summary": (
-            "A 70 sq ft rain garden, 12 in deep, for your 700 sq ft catchment. "
-            "Interior and perimeter plant lists are NY-hardy to zone 7b. Amend the "
-            "clay-leaning soil with compost and add an overflow outlet away from "
+            "A {area_sqft} sq ft rain garden, {depth_inches} in deep, for your "
+            "{catchment_sqft} sq ft catchment. The interior and perimeter plant "
+            "lists are matched to your hardiness zone. Amend the clay-leaning soil "
+            "with compost and add an overflow outlet that directs water away from "
             "the house.")}, "t6"),
     ], "tool_use"),
 ])

@@ -16,6 +16,8 @@ multi-tenant, sensitive, or cost/privilege-amplifying data.
 
 from __future__ import annotations
 
+import re
+
 from dotenv import find_dotenv, load_dotenv
 
 # Entry point owns env loading (§7): load .env before the Anthropic client reads
@@ -55,7 +57,7 @@ class ChatResponse(BaseModel):
     status: str  # awaiting_user | complete | out_of_region | error
     messages: list = []
     assistant_message: str | None = None
-    results: dict | None = None  # includes the disjoint "guidance" channel on complete
+    results: dict | None = None  # sizing/plants/advisories + token-injected summary
     detail: str | None = None
 
 
@@ -73,36 +75,111 @@ def _has_preamble(messages: list | None) -> bool:
     return False
 
 
+# Curated allow-list of summary tokens sourced 1:1 from the size_garden design.
+# catchment_sqft is handled separately (it comes from the tool INPUT, not the
+# design output). Enumerated explicitly — never a **design splat — so an unknown
+# token in the model summary is a detectable error, not a silent pass-through.
+_SUMMARY_DESIGN_KEYS = (
+    "area_sqft", "depth_inches", "elongated_width_ft", "elongated_length_ft",
+    "balanced_side_ft", "interior_plant_count", "perimeter_plant_count",
+    "drainage_time_hours", "gallons_per_year",
+)
+_TOKEN_RE = re.compile(r"\{(\w+)\}")
+
+
+def _substitutions(sizing_entry: dict) -> dict:
+    """Curated token -> deterministic value map for summary substitution.
+
+    Values may be None (e.g. drainage_time_hours without a measured perc rate);
+    :func:`_resolve_summary` treats a *referenced* null as an error and falls back.
+    catchment_sqft is read from the size_garden INPUT (it is not a design output).
+    """
+    design = sizing_entry["output"]["design"]
+    subs = {k: design.get(k) for k in _SUMMARY_DESIGN_KEYS}
+    subs["catchment_sqft"] = sizing_entry["input"].get("catchment_sa")
+    return subs
+
+
+def _fallback_summary(subs: dict) -> str:
+    """Fully code-authored summary. Tokens filled from ``subs``; any clause whose
+    value is null is omitted. Its only digits are substituted deterministic values
+    (no narrative digits), so it is returned as-is with no digit guard."""
+    parts = [
+        f"Your rain garden should cover about {subs['area_sqft']} sq ft and sit "
+        f"{subs['depth_inches']} inches deep. Shape it either elongated "
+        f"({subs['elongated_width_ft']} ft by {subs['elongated_length_ft']} ft, long "
+        f"side across the water's path) or squarer ({subs['balanced_side_ft']} ft per "
+        f"side).",
+        f"Plan for {subs['interior_plant_count']} plants in the wetter center and "
+        f"{subs['perimeter_plant_count']} around the drier edge.",
+    ]
+    if subs.get("gallons_per_year") is not None:
+        parts.append(
+            f"It captures roughly {subs['gallons_per_year']} gallons of runoff a year "
+            f"from about {subs['catchment_sqft']} sq ft of catchment."
+        )
+    if subs.get("drainage_time_hours") is not None:
+        parts.append(
+            f"After a storm it drains in about {subs['drainage_time_hours']} hours."
+        )
+    parts.append("Review the advisories below before you dig.")
+    return " ".join(parts)
+
+
+def _resolve_summary(raw_summary, subs: dict) -> str:
+    """Render the model's summary by injecting deterministic values for its tokens.
+
+    Every garden dimension the model references is a token, and each token is
+    replaced with its deterministic value here — so no *computed* garden value
+    originates in model prose. Two conditions route to the code-authored fallback
+    instead:
+    * an unknown token (not in the allow-list); or
+    * a referenced token whose value is null (null-is-error, never blank-fill —
+      mirrors the prompt's reference-only-present-values rule).
+
+    Incidental non-dimension digits the model writes as prose (a hardiness zone like
+    "7b", the 811 dig line) are not computed garden values, so they need no
+    substitution and are left exactly as written.
+    """
+    raw = raw_summary or ""
+    referenced = _TOKEN_RE.findall(raw)
+    if any(name not in subs or subs[name] is None for name in referenced):
+        return _fallback_summary(subs)
+    return _TOKEN_RE.sub(lambda m: str(subs[m.group(1)]), raw)
+
+
 def _assemble_results(call_log: list) -> dict:
     """Build the structured results payload from the deterministic tool outputs.
 
     Reads call_log (not model text). Dict comprehension keeps the *last* entry per
     tool name, so a refine turn that re-runs size_garden surfaces the updated design.
-    Guards against a prompt slip (present_results without the sizing/plant calls in
-    this request's log): returns whatever is present rather than raising KeyError.
+
+    The summary is rendered by token substitution (:func:`_resolve_summary`): the
+    model authors it with named {tokens}, and the exact deterministic values are
+    injected here, so no computed number ever originates in model prose. Retrieved
+    guidance is narrative fuel for that prose upstream — it is NOT a results field.
+
+    Guards against a prompt slip (present_results without the sizing call in this
+    request's log): with no design to substitute against, the raw summary passes
+    through rather than raising KeyError.
     """
     latest = {c["name"]: c for c in call_log}
     present = latest.get("present_results")
-    results: dict = {
-        "summary": present["input"].get("summary") if present else None,
-    }
+    raw_summary = present["input"].get("summary") if present else None
+
+    results: dict = {}
     # Numeric/structured fields — sourced ONLY from the deterministic compute-tool
-    # entries (spec section 0). No guidance entry is ever read into these.
+    # entries. Advisories pass through byte-identical to the size_garden output.
     sizing = latest.get("size_garden")
     if sizing:
+        results["summary"] = _resolve_summary(raw_summary, _substitutions(sizing))
         results["sizing"] = sizing["output"]
         results["advisories"] = sizing["output"].get("advisories", [])
+    else:
+        results["summary"] = raw_summary
     plants = latest.get("filter_plants")
     if plants:
         results["plants"] = plants["output"]
-    # Guidance channel — sourced ONLY from the search_guidance entry, never a
-    # numeric field. The two read paths are disjoint by construction: this is the
-    # structural enforcement of the additive-retrieval invariant. A missing or
-    # errored ({"is_error": ...}) entry yields an empty channel, keeping guidance
-    # strictly optional.
-    guidance = latest.get("search_guidance")
-    output = guidance.get("output") if guidance else None
-    results["guidance"] = output.get("passages", []) if isinstance(output, dict) else []
     return results
 
 
