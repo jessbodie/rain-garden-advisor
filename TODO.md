@@ -13,6 +13,63 @@ Reference this file in CLAUDE.md so Claude Code keeps it in context.
 
 ---
 
+## Implemented: Roof Catchment Area Estimation (Google Solar API)
+Implemented 2026-07-03 (branch `estimate-roofSA`). Verified live against the Solar
+API and offline via fixtures (191+ tests). The original feature spec is superseded by
+the shipped design; the resolved decisions are captured here.
+
+**What shipped**
+- `src/rain_garden/roofarea.py` — `estimate_roof_area(lat, lon, timeout_s=5.0)` calls
+  Solar `buildingInsights.findClosest`, reads `wholeRoofStats.groundAreaMeters2`
+  (footprint, not sloped `areaMeters2`), converts ×10.7639, rounds to nearest 10.
+  Every failure — no building, no coverage, HTTP error, 5s timeout, **missing key** —
+  degrades to `None` (never raises; diverges from hardiness's fatal-key policy because
+  the estimate is additive reference context).
+- Resolved **at seed time** in `app.py` (reusing the geocoded lat/lon), not as a
+  dispatched agent tool — so it's ready before the catchment question and its value is
+  turn-independent.
+- **Redaction:** only *availability* rides in the seed preamble
+  (`[Roof estimate: available|unavailable]`); the raw digit is carried **out of band**
+  on `ChatRequest`/`ChatResponse.roof_sqft` (echoed by the client, never in
+  `messages`). It reaches the user only via deterministic `{roof_sqft}` substitution
+  (`_resolve_roof`) and the calculation only via server injection — model-authored
+  nowhere.
+- **Adoption ("I don't know" path):** the user may adopt the estimate as their
+  catchment area. `size_garden` gained an optional `adopt_roof_estimate` flag;
+  `run_agent` injects the exact out-of-band value as `catchment_sa` before dispatch
+  (recoverable error if no estimate exists — never a hard failure). Compute layer
+  (`_size_garden`, `sizing.py`) untouched.
+- `catchment_sa` moved out of the pre-chat `ChatRequest` into conversational
+  slot-filling (address stays pre-chat).
+- Persistent results-card advisory whenever an estimate was offered (whole-roof
+  footprint ≠ this downspout's share).
+
+**Fallback copy — RESOLVED (softened, reference-only)**
+The "~1,700 sq ft" figure is a soft, unverified reference number (single roofing blog,
+likely a *sloped surface-area* figure, not footprint). It is offered only on the
+no-estimate path as loose context, never as a computed value or an adoptable answer.
+Decided wording (in `prompts.py`):
+- With estimate: *"Roughly how many square feet drain into this spot? For reference,
+  satellite imagery puts your whole roof at about {roof_sqft} sq ft — but most homes
+  drain through more than one downspout, so the area feeding this one is usually
+  smaller."*
+- No estimate (fallback): *"Roughly how many square feet of roof or pavement drain
+  into this spot? We couldn't pull a satellite estimate here, but for rough context a
+  typical US home roof is very roughly 1,700 sq ft — a ballpark, not your answer."*
+Only `{roof_sqft}` is adoptable; the ~1,700 figure never is.
+
+**Still open / deferred here**
+- `imagery_date` is parsed and returned by the module but not surfaced to the user
+  (logged/unused) — decide if it needs display.
+- The ~1,700 constant remains sourced from a single blog; fine for a portfolio
+  project, revisit if an authoritative footprint average (Census/NAHB) is wanted.
+- Driveway/patio (non-roof impervious) estimation stays **out of scope** — no
+  deterministic data source; would need CV/segmentation.
+- `GOOGLE_SOLAR_API_KEY` must have the Solar API enabled and (if restricted) allow the
+  dev/deploy caller — a misconfigured key returns 403, which the code treats as `None`.
+
+---
+
 ## Deferrals (cut from v1, planned for v2)
 
 **Precipitation dashboard charts**
@@ -139,8 +196,18 @@ and still no throttle exists. Now an outstanding gap, not future work.
 **RAPIDAPI_KEY is currently a hard dependency (a missing key crashes the run)** 
 A rain garden design arguably could still be useful without the plant list. Make the app more resilient, make the hardiness lookup degrade gracefully (like precipitation) 
 
-**Plant lists are capped at 15 each.**
-TODO
+**Plant lists are capped at 15 each. Paginate?**
+
+**Ability to sort plant list by height, color, bloom_period**
+
+**Ability to filter plant list by height, color, bloom_period**
+
+**About page**
+
+**Credits/Sources page**
+
+**Education piece about value of rain garden**
+
 
 ---
 

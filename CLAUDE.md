@@ -23,12 +23,14 @@ the tools do the calculation.
 All calculation logic stays in Python. It was written in Python; keep it there.
 Do NOT port any calculation logic to JavaScript.
 
-**Deterministic core — five clean modules, each independently testable:**
+**Deterministic core — six clean modules, each independently testable:**
 - `src/rain_garden/sizing.py` — garden area, dimensions, depth, plant counts ✅
 - `src/rain_garden/precipitation.py` — three weather scalars from Open-Meteo ✅
 - `src/rain_garden/geocode.py` — address → lat/lon via Nominatim ✅
 - `src/rain_garden/hardiness.py` — USDA hardiness zone via RapidAPI ✅
 - `src/rain_garden/plants.py` — structured plant filter from CSV ✅
+- `src/rain_garden/roofarea.py` — roof footprint (sq ft) via Google Solar API ✅
+  (resolved at seed time, NOT a dispatched tool — see the roof-estimate note below)
 
 **Tool layer (`tools.py`) wraps the five modules as agent-callable tools.** It owns the
 deterministic site advisories (not the LLM). `size_garden` takes two *separate* slope inputs:
@@ -57,6 +59,37 @@ does not block, `recommended` stays true). Omitting a slope input fires no advis
   so geocoding runs exactly once per conversation.
 - `prompts.py` — `SYSTEM_PROMPT`, passed verbatim as the API `system` parameter.
 
+**Roof catchment estimate (Google Solar API) — a deterministic reference number
+folded into the catchment question.** ✅ `catchment_sa` is collected conversationally
+(it was removed from the pre-chat `ChatRequest`; address stays pre-chat). When the
+user is asked for it, a satellite whole-roof footprint estimate is offered as context
+they can confirm, adjust, ignore, or **knowingly adopt** as their answer.
+- `roofarea.estimate_roof_area` is resolved **at seed time in `app.py`** (reusing the
+  geocoded lat/lon), not dispatched through `tools.py` — so it's ready before the
+  catchment question and its value is turn-independent. All failures (no building, no
+  coverage, HTTP error, 5s timeout, missing key) return `None`, never raising.
+- **The raw digit is redacted from the model's context.** Only *availability* rides in
+  the seed preamble (`ROOF_ESTIMATE_MARKER`: `[Roof estimate: available|unavailable]`).
+  The exact number is carried **out of band** on `ChatRequest`/`ChatResponse.roof_sqft`
+  (the client echoes it alongside `messages`, but it is NEVER placed inside `messages`).
+  This one out-of-band value is the single source of truth for both display and
+  calculation — no second recovery path.
+- The number reaches the **user** only via deterministic substitution: the model
+  authors `{roof_sqft}` in its question; `app._resolve_roof` injects the exact value on
+  `awaiting_user` turns (same technique as the summary token seam, scoped to one
+  token). The token stays in the transport transcript; the client renders its visible
+  log from the returned `assistant_message`, so substitution lives in exactly one place.
+- The number reaches the **calculation** only via server injection: `size_garden` has
+  an optional `adopt_roof_estimate` flag; when the user adopts the estimate, `run_agent`
+  (`_resolve_catchment`) fills `catchment_sa` with the out-of-band value and strips the
+  flag **before dispatch** (recoverable error if no estimate is on record — never a hard
+  failure). `_size_garden`/`sizing.py` are untouched; the compute layer only ever sees a
+  concrete numeric `catchment_sa`. So the roof digit is model-authored nowhere.
+- A persistent results-card advisory (whole-roof footprint ≠ this downspout's share) is
+  appended whenever an estimate was offered this session, read from the availability
+  marker. The `~1,700 sq ft` fallback (no-estimate path) is soft, reference-only copy —
+  never a computed value and never adoptable. See TODO.md for the resolved wording.
+
 **RAG is scoped to unstructured prose only — and it is strictly additive.** ✅
 Construction, maintenance, and troubleshooting guidance = RAG. Plant selection =
 deterministic filter in plants.py. Do not apply RAG to structured data.
@@ -76,14 +109,26 @@ deterministic filter in plants.py. Do not apply RAG to structured data.
   The `search_guidance` `call_log` entry is retained server-side (traceability,
   About-section sourcing), but retrieved prose never feeds a tool input or a
   computed value, and never surfaces as its own results field.
-- Numbers in the summary are **token-injected deterministically.** The model
-  authors the summary with named `{tokens}` (`{area_sqft}`, `{gallons_per_year}`,
-  `{drainage_time_hours}`, …); `_assemble_results` substitutes the exact
-  compute-tool values, so no *computed* garden value originates in model prose. A
-  summary that references an unknown or null-valued token falls back to a fully
-  code-authored template. Incidental non-dimension digits (a hardiness zone like
-  "7b", the 811 dig line) are left as written — there is no digit scan. Advisories
-  pass through byte-identical from the `size_garden` output — the AI never modifies them.
+- Numbers in the summary are **token-injected deterministically**, under a strict
+  taxonomy:
+  - **Computed deterministic values** (area, depth, elongated/balanced widths and
+    lengths, interior/perimeter plant counts, catchment, gallons, drainage time)
+    are always injected as named `{tokens}` (`{area_sqft}`, `{gallons_per_year}`,
+    `{drainage_time_hours}`, …) — never digits, never qualitative words. The model
+    authors prose with the tokens; `_assemble_results` substitutes the exact
+    compute-tool values, so no *computed* garden value originates in model prose. A
+    null value drops its whole clause (the model omits the token). A summary that
+    references an unknown or null-valued token falls back to a fully code-authored
+    template.
+  - **Guidance-derived numbers** are always qualitative ("drains within a day or
+    two"), never digits — those are the only numbers expressed in words.
+  - A single physical quantity (e.g. drainage timing) may have both a computed
+    token and a guidance mention; **prefer the computed token** and do not
+    numerically paraphrase the guidance version.
+  - Incidental non-dimension digits (a hardiness zone like "7b", the 811 dig line)
+    are left as written — there is no digit scan.
+  Advisories pass through byte-identical from the `size_garden` output — the AI
+  never modifies them.
 - Corpus + index are built offline by `scripts/build_rag_index.py` and shipped;
   there is no runtime index build (mirrors the CSV pattern).
 
@@ -108,6 +153,10 @@ in TODO.md.
 - `RAPIDAPI_KEY` — USDA hardiness zone API (RapidAPI)
 - `ANTHROPIC_API_KEY` — for the app's LLM calls (not the same
   as a Claude.ai subscription; billed per token via console.anthropic.com)
+- `GOOGLE_SOLAR_API_KEY` — Google Maps Platform Solar API (roof-area estimate).
+  The key must have the **Solar API enabled** and, if restricted, allow the caller —
+  a misconfigured key returns HTTP 403, which the code treats as a `None` estimate
+  (graceful fallback, never fatal). Free tier covers portfolio-scale usage.
 - Open-Meteo (precipitation) and Nominatim (geocoding) require no keys.
   Nominatim requires a descriptive User-Agent string.
 
