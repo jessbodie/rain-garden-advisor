@@ -105,26 +105,44 @@ def geocode_and_gate(address: str) -> dict:
 # (present -> geocode already ran), so geocoding happens exactly once per conversation.
 LOCATION_PREAMBLE_MARKER = "[Resolved location:"
 
+# The seed also records whether a satellite roof-area estimate resolved — as
+# *availability only*, never the digit. The model reads this to decide whether to
+# offer the estimate (via the {roof_sqft} token) or the no-estimate fallback copy;
+# the HTTP layer reads it to decide whether to attach the results-card advisory. The
+# exact number is redacted from the transcript and carried out of band (see app.py).
+ROOF_ESTIMATE_MARKER = "[Roof estimate:"
+ROOF_ESTIMATE_AVAILABLE = f"{ROOF_ESTIMATE_MARKER} available]"
+ROOF_ESTIMATE_UNAVAILABLE = f"{ROOF_ESTIMATE_MARKER} unavailable]"
 
-def build_seed(location: dict, catchment_sa, slots: str | None = None) -> str:
-    """Build the seeded first user turn: location preamble + drainage area (+ slots).
+
+def build_seed(
+    location: dict, roof_estimate: dict | None = None, slots: str | None = None
+) -> str:
+    """Build the seeded first user turn: location + roof-estimate availability (+ slots).
 
     ``location`` is a successful :func:`geocode_and_gate` result. The preamble opens
     with :data:`LOCATION_PREAMBLE_MARKER` (the geocode-once discriminator) and carries
-    the resolved state/zip/lat/lon so the model never asks for them. ``catchment_sa``
-    is a user input, not a geocode field, so it rides here as its own line.
+    the resolved state/zip/lat/lon so the model never asks for them.
 
-    ``slots`` (optional) is free-text embedding the four site details. The oracle
-    passes all four so its run stays a one-shot ``complete``; the HTTP seed path omits
-    it and lets the model slot-fill across turns. Sole builder of the preamble so the
-    marker string lives in exactly one place.
+    ``roof_estimate`` is the :func:`rain_garden.roofarea.estimate_roof_area` result
+    (or ``None``). Only its *availability* is written here — never the digit. The exact
+    number is redacted from the model's context and reaches the user solely through
+    deterministic ``{roof_sqft}`` substitution in the HTTP layer, so the model can
+    never author or mis-transcribe a value the user may adopt as their catchment area.
+
+    ``slots`` (optional) is free-text embedding the site details, INCLUDING the
+    catchment area (now a conversational detail, no longer pre-filled in the seed).
+    The oracle passes all details so its run stays a one-shot ``complete``; the HTTP
+    seed path omits it and lets the model slot-fill across turns. Sole builder of the
+    preamble so the marker strings live in exactly one place.
     """
     preamble = (
         f"{LOCATION_PREAMBLE_MARKER} {location['address']}, "
         f"state {location['state']}, zip {location['zip_code']}, "
         f"lat {location['lat']}, lon {location['lon']}]"
     )
-    seed = f"{preamble}\n\nDrainage area: {catchment_sa} sq ft."
+    roof_line = ROOF_ESTIMATE_AVAILABLE if roof_estimate else ROOF_ESTIMATE_UNAVAILABLE
+    seed = f"{preamble}\n\n{roof_line}"
     if slots:
         seed = f"{seed}\n\n{slots}"
     return seed
@@ -214,7 +232,22 @@ TOOLS = [
             "properties": {
                 "catchment_sa": {
                     "type": "number",
-                    "description": "Drainage (catchment) area in square feet.",
+                    "description": (
+                        "Drainage (catchment) area in square feet, as stated by the user. "
+                        "Provide this OR set adopt_roof_estimate=true when the user chooses "
+                        "to use the satellite roof estimate — never both, and never a value "
+                        "you invented."
+                    ),
+                },
+                "adopt_roof_estimate": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true ONLY when the user asks to use the satellite roof-area "
+                        "estimate as their catchment area. The server fills catchment_sa with "
+                        "the exact estimate; do not pass a number yourself. Requires a roof "
+                        "estimate to have resolved this session (see the seed's roof-estimate "
+                        "marker); otherwise you'll get an error to ask for the area directly."
+                    ),
                 },
                 "soil_type": {
                     "type": "string",
@@ -254,7 +287,11 @@ TOOLS = [
                     "description": "From get_precipitation_stats; enables gallons-diverted output.",
                 },
             },
-            "required": ["catchment_sa"],
+            # Neither is unconditionally required: the caller supplies catchment_sa OR
+            # sets adopt_roof_estimate. The agent loop validates that exactly one path is
+            # taken (and resolves the adoption) before dispatch, so the compute layer
+            # always receives a concrete numeric catchment_sa.
+            "required": [],
         },
     },
     {
@@ -318,6 +355,9 @@ PRESENT_RESULTS = "present_results"
 # call_log co-occurrence). Forming the query needs the advisories those tools
 # produced, so this ordering is also what the model naturally does.
 SEARCH_GUIDANCE = "search_guidance"
+# The sizing tool. The agent loop special-cases it to resolve an adopt_roof_estimate
+# call into a concrete catchment_sa before dispatch (see agent._resolve_catchment).
+SIZE_GARDEN = "size_garden"
 GUIDANCE_PREREQS = frozenset({"size_garden", "filter_plants"})
 GUIDANCE_GATE_MSG = (
     "search_guidance is only available on the final turn, after size_garden and "

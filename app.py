@@ -30,8 +30,10 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from agent import last_assistant_text, run_agent  # noqa: E402
+from rain_garden.roofarea import estimate_roof_area  # noqa: E402
 from tools import (  # noqa: E402
     LOCATION_PREAMBLE_MARKER,
+    ROOF_ESTIMATE_AVAILABLE,
     FatalToolError,
     build_seed,
     geocode_and_gate,
@@ -45,12 +47,18 @@ _client = anthropic.Anthropic()
 
 
 class ChatRequest(BaseModel):
-    # Seed request: a fresh conversation.
+    # Seed request: a fresh conversation. catchment_sa is NO LONGER pre-supplied — it
+    # is gathered conversationally (the roof estimate is offered as reference context).
     address: str | None = None
-    catchment_sa: float | None = None
     # Continue request: prior transcript returned last turn, plus the new answer.
     messages: list | None = None
     user_message: str | None = None
+    # Out-of-band carrier for the exact satellite roof estimate. Resolved at seed time,
+    # returned in ChatResponse, and echoed back by the client on every continue — it is
+    # deliberately kept OUT of `messages` so the raw digit never enters the model's
+    # context. Single source of truth for both the {roof_sqft} question substitution and
+    # an adopt_roof_estimate size_garden call.
+    roof_sqft: float | None = None
 
 
 class ChatResponse(BaseModel):
@@ -59,6 +67,8 @@ class ChatResponse(BaseModel):
     assistant_message: str | None = None
     results: dict | None = None  # sizing/plants/advisories + token-injected summary
     detail: str | None = None
+    # Echoed back so the client can resend it next turn (see ChatRequest.roof_sqft).
+    roof_sqft: float | None = None
 
 
 def _has_preamble(messages: list | None) -> bool:
@@ -73,6 +83,55 @@ def _has_preamble(messages: list | None) -> bool:
         if isinstance(content, str) and LOCATION_PREAMBLE_MARKER in content:
             return True
     return False
+
+
+def _roof_estimate_available(messages: list | None) -> bool:
+    """True if a satellite roof estimate resolved this session.
+
+    Read from the seed preamble's availability marker (which persists across turns,
+    like the location marker) — NOT from the raw digit, which never enters `messages`.
+    Gates the results-card roof advisory.
+    """
+    for msg in messages or []:
+        content = msg.get("content")
+        if isinstance(content, str) and ROOF_ESTIMATE_AVAILABLE in content:
+            return True
+    return False
+
+
+# Persistent results-card advisory whenever a roof estimate was offered this session
+# (regardless of the user's final catchment_SA): the estimate is whole-roof footprint,
+# not this downspout's share. The chat question happens early and may be scrolled past.
+_ROOF_ADVISORY = {
+    "type": "roof_estimate",
+    "severity": "informational",
+    "message": (
+        "The satellite roof estimate reflects your entire roof's footprint — not the "
+        "catchment area for this specific downspout. Most homes have more than one "
+        "gutter and downspout, each carrying only part of the total roof runoff."
+    ),
+}
+
+_ROOF_TOKEN = "{roof_sqft}"
+
+
+def _resolve_roof(text: str, roof_sqft) -> str:
+    """Inject the exact roof value for the question turn's ``{roof_sqft}`` token.
+
+    The roof digit is redacted from the model's context, so it enters the outgoing
+    text ONLY here (mirrors ``_resolve_summary``, scoped to one token). The token stays
+    in the transport ``messages`` transcript (the model keeps seeing a placeholder, not
+    a number); the client renders its visible chat log from this returned string, so
+    substitution lives in exactly one place. If the token appears with no value on
+    record (should not happen — the prompt only writes it when the estimate is
+    available), drop the sentence rather than emit a literal brace.
+    """
+    if not text or _ROOF_TOKEN not in text:
+        return text
+    if roof_sqft is None:
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        return " ".join(s for s in sentences if _ROOF_TOKEN not in s).strip()
+    return text.replace(_ROOF_TOKEN, str(int(roof_sqft)))
 
 
 # Curated allow-list of summary tokens sourced 1:1 from the size_garden design.
@@ -195,19 +254,26 @@ def chat(req: ChatRequest):
     messages = list(req.messages or [])
 
     if _has_preamble(messages):
-        # Continue: geocode already ran (its output rides in the preamble and the
-        # precip/hardiness tool_results). Append the user's answer and re-drive.
+        # Continue: geocode + roof estimate already ran on the seed turn. The roof value
+        # rides out of band (req.roof_sqft), echoed by the client each turn — never in
+        # `messages`. Append the user's answer and re-drive.
         messages.append({"role": "user", "content": req.user_message or ""})
+        roof_sqft = req.roof_sqft
     else:
         # Seed: geocode + gate before any model call. Out-of-region is a terminal
         # business outcome (HTTP 200), not an error, and never reaches the model.
         location = geocode_and_gate(req.address or "")
         if not location.get("ok"):
             return ChatResponse(status="out_of_region", detail=location["message"])
-        messages = [{"role": "user", "content": build_seed(location, req.catchment_sa)}]
+        # Resolve the roof estimate once, up front (reusing the geocoded lat/lon), so it
+        # is available before the catchment question. Bounded by a ~5s timeout; None on
+        # any failure. Only *availability* rides in the seed; the digit stays out of band.
+        estimate = estimate_roof_area(location["lat"], location["lon"])
+        roof_sqft = estimate["roof_sqft"] if estimate else None
+        messages = [{"role": "user", "content": build_seed(location, estimate)}]
 
     try:
-        messages, status, call_log = run_agent(messages, client=_client)
+        messages, status, call_log = run_agent(messages, client=_client, roof_sqft=roof_sqft)
     except FatalToolError as exc:  # specific catch (§7) — e.g. missing API key
         return JSONResponse(
             status_code=500,
@@ -226,13 +292,21 @@ def chat(req: ChatRequest):
         )
 
     results = _assemble_results(call_log) if status == "complete" else None
+    if results is not None and _roof_estimate_available(messages):
+        # Independent of size_garden's own advisories: the persistent whole-roof caveat,
+        # shown whenever an estimate was offered — regardless of the user's final value.
+        results.setdefault("advisories", []).append(_ROOF_ADVISORY)
+
     assistant = last_assistant_text(messages)
     if not assistant and results:
         assistant = results.get("summary")
+    # Deterministic {roof_sqft} injection for the question turn (no-op on other turns).
+    assistant = _resolve_roof(assistant, roof_sqft)
 
     return ChatResponse(
         status=status,
         messages=messages,
         assistant_message=assistant or None,
         results=results,
+        roof_sqft=roof_sqft,
     )
