@@ -44,6 +44,7 @@ from tools import (
     GUIDANCE_PREREQS,
     PRESENT_RESULTS,
     SEARCH_GUIDANCE,
+    SIZE_GARDEN,
     TOOLS,
     FatalToolError,
     build_seed,
@@ -77,12 +78,50 @@ def last_assistant_text(messages: list) -> str:
     return ""
 
 
-def run_agent(messages: list, client=None) -> tuple[list, str, list]:
+def _resolve_catchment(tool_input: dict, roof_sqft: float | None) -> tuple[dict, dict | None]:
+    """Resolve size_garden's catchment area before dispatch.
+
+    Returns ``(effective_input, error)``. When the user adopted the satellite roof
+    estimate (``adopt_roof_estimate=true``), the exact out-of-band ``roof_sqft`` value
+    is injected as ``catchment_sa`` and the flag stripped — the figure is never
+    model-authored, so the number the user saw is exactly the one that feeds the
+    calculation. A missing estimate (adoption with no value on record) or a missing
+    number both yield a *recoverable* error the model reacts to — never a hard failure.
+    """
+    if tool_input.get("adopt_roof_estimate"):
+        if roof_sqft is None:
+            return tool_input, {
+                "is_error": True,
+                "message": (
+                    "No roof estimate is available to adopt; ask the user for the "
+                    "catchment area in square feet instead."
+                ),
+            }
+        resolved = {k: v for k, v in tool_input.items() if k != "adopt_roof_estimate"}
+        resolved["catchment_sa"] = roof_sqft
+        return resolved, None
+    if tool_input.get("catchment_sa") is None:
+        return tool_input, {
+            "is_error": True,
+            "message": (
+                "size_garden needs a catchment area: pass catchment_sa (square feet) "
+                "or set adopt_roof_estimate=true to use the satellite estimate."
+            ),
+        }
+    return tool_input, None
+
+
+def run_agent(
+    messages: list, client=None, roof_sqft: float | None = None
+) -> tuple[list, str, list]:
     """Drive the tool loop over ``messages`` until it pauses or completes.
 
     ``messages`` already carries the location preamble (built by :func:`build_seed`)
     on the seed turn and every prior turn on a continuation — this function never
-    geocodes. Returns ``(messages, status, call_log)``:
+    geocodes. ``roof_sqft`` is the out-of-band satellite roof-area value (or ``None``);
+    it is the single source of truth used to resolve an ``adopt_roof_estimate`` call
+    into a concrete ``catchment_sa`` — see :func:`_resolve_catchment`. Returns
+    ``(messages, status, call_log)``:
 
     * ``status == "awaiting_user"`` — the model asked a question (``end_turn`` with
       trailing text and no ``present_results``); the caller resumes by appending the
@@ -152,10 +191,28 @@ def run_agent(messages: list, client=None) -> tuple[list, str, list]:
                         "content": json.dumps(gated),
                     })
                     continue
+                # size_garden may carry the adoption flag (user chose the satellite
+                # estimate): resolve catchment_sa deterministically before dispatch so
+                # the compute layer only ever sees a concrete number. The RESOLVED input
+                # is what we log — so the summary's {catchment_sqft} token, read from this
+                # entry, is the deterministic value too.
+                tool_input = block.input
+                if block.name == SIZE_GARDEN:
+                    tool_input, size_err = _resolve_catchment(tool_input, roof_sqft)
+                    if size_err is not None:
+                        call_log.append(
+                            {"name": block.name, "input": block.input, "output": size_err}
+                        )
+                        results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(size_err),
+                        })
+                        continue
                 # FatalToolError propagates to the endpoint (§7) — no longer swallowed.
-                out = dispatch(block.name, block.input)
+                out = dispatch(block.name, tool_input)
                 call_log.append(
-                    {"name": block.name, "input": block.input, "output": out}
+                    {"name": block.name, "input": tool_input, "output": out}
                 )
                 results.append({
                     "type": "tool_result",
@@ -286,8 +343,9 @@ def _run_oracle(location, status, call_log, messages):
 if __name__ == "__main__":
     # Fully-seeded Brooklyn smoke test (Section 7): every site detail is embedded in
     # the seed so the model needs no follow-up questions and runs one-shot to a
-    # present_results completion. catchment_sa rides in build_seed's drainage line,
-    # so the slot text below deliberately omits a second area figure.
+    # present_results completion. Catchment is now a conversational detail (no longer
+    # pre-filled in the seed), so the slot text states it explicitly. No roof estimate
+    # is passed here — the oracle exercises the ordinary user-stated-number path.
     from dotenv import find_dotenv, load_dotenv
     load_dotenv(find_dotenv(usecwd=True))  # oracle is its own entry point
 
@@ -298,12 +356,13 @@ if __name__ == "__main__":
         sys.exit(1)
 
     slots = (
-        "I'd like to plan a rain garden in my yard. It's more than 30 feet from the "
-        "house. The ground is flat there — well under a 12% grade. It gets partial "
-        "sun. I haven't tested my soil and honestly couldn't tell you what type it "
-        "is. Please size the garden and recommend plants."
+        "I'd like to plan a rain garden in my yard. About 700 square feet of roof "
+        "drains toward the spot. It's more than 30 feet from the house. The ground is "
+        "flat there — well under a 12% grade. It gets partial sun. I haven't tested my "
+        "soil and honestly couldn't tell you what type it is. Please size the garden "
+        "and recommend plants."
     )
-    messages = [{"role": "user", "content": build_seed(location, 700, slots=slots)}]
+    messages = [{"role": "user", "content": build_seed(location, None, slots=slots)}]
 
     messages, status, call_log = run_agent(messages)
     print(last_assistant_text(messages))

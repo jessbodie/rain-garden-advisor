@@ -1,0 +1,16 @@
+{
+  "name": "buildings/ChIJExampleBrooklyn",
+  "center": {"latitude": 40.6501, "longitude": -73.9496},
+  "imageryDate": {"year": 2022, "month": 8, "day": 15},
+  "imageryQuality": "HIGH",
+  "postalCode": "11209",
+  "administrativeArea": "NY",
+  "solarPotential": {
+    "maxArrayPanelsCount": 42,
+    "wholeRoofStats": {
+      "areaMeters2": 210.5,
+      "sunshineQuantiles": [],
+      "groundAreaMeters2": 160.0
+    }
+  }
+}

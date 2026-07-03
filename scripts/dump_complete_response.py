@@ -157,9 +157,9 @@ app._client = FakeClient([
 
 def main() -> None:
     client = TestClient(app.app)
-    resp = client.post(
-        "/chat", json={"address": "97 80th St, Brooklyn NY", "catchment_sa": 700}
-    )
+    # catchment_sa is no longer a seed field (it's gathered conversationally); the
+    # scripted FakeClient drives size_garden directly, so the seed needs only the address.
+    resp = client.post("/chat", json={"address": "97 80th St, Brooklyn NY"})
     print(f"HTTP {resp.status_code}\n")
     print(json.dumps(resp.json(), indent=2))
 

@@ -42,13 +42,14 @@ from agent import last_assistant_text, run_agent  # noqa: E402
 from tools import build_seed, geocode_and_gate  # noqa: E402
 
 ADDRESS = "97 80th St. Brooklyn NY"
-CATCHMENT_SA = 700
+# Catchment is now a conversational detail (no longer pre-filled in the seed), so it
+# is stated in the slot text along with the rest. No roof estimate is seeded here.
 SLOTS = (
-    "I'd like to plan a rain garden. It's more than 30 feet from the house, on "
-    "flat ground well under a 12% grade, and the ground slopes away from the "
-    "house. It gets partial sun. The soil is loamy — crumbly and drains well. I "
-    "measured the percolation rate at about 1 inch per hour. Please size the "
-    "garden and recommend plants."
+    "I'd like to plan a rain garden. About 700 square feet of roof drains toward the "
+    "spot. It's more than 30 feet from the house, on flat ground well under a 12% "
+    "grade, and the ground slopes away from the house. It gets partial sun. The soil "
+    "is loamy — crumbly and drains well. I measured the percolation rate at about 1 "
+    "inch per hour. Please size the garden and recommend plants."
 )
 
 _TOKEN_RE = re.compile(r"\{(\w+)\}")
@@ -60,7 +61,7 @@ def main() -> None:
         print(f"Geocode/gate failed: {location.get('message')}")
         sys.exit(1)
 
-    messages = [{"role": "user", "content": build_seed(location, CATCHMENT_SA, slots=SLOTS)}]
+    messages = [{"role": "user", "content": build_seed(location, None, slots=SLOTS)}]
     messages, status, call_log = run_agent(messages, client=app._client)
 
     print(f"=== status: {status} ===\n")
