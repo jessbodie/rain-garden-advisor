@@ -135,7 +135,7 @@ def test_run_agent_sizes_on_injected_estimate():
     # to it too), and a real design was computed from it.
     assert sizing["input"]["catchment_sa"] == 1730
     assert "adopt_roof_estimate" not in sizing["input"]
-    assert sizing["output"]["design"]["area_sqft"] > 0
+    assert all(o["area_sqft"] > 0 for o in sizing["output"]["sizing"]["options"])
 
 
 def test_run_agent_adoption_without_estimate_does_not_crash():

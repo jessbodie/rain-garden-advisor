@@ -105,39 +105,38 @@ def test_search_guidance_dispatched_after_compute(monkeypatch):
     assert entry["output"] == {"passages": passages}   # dispatched, not gated
 
 
-# --- results assembly: token-injected summary + guidance dropped -------------
+# --- results assembly: per-option token-injected summaries, guidance dropped --
 # Numbers are constructed test inputs, NOT oracle values — assertions check the
 # substitution/guard machinery, never that a particular area is "correct".
 
-# Canonical size_garden design. drainage/gallons default null (the common
-# no-perc-rate / soil-unknown run); individual tests override as needed.
-_DESIGN = {
-    "sizing_factor": 0.10,
-    "area_sqft": 70,
-    "elongated_width_ft": 6,
-    "elongated_length_ft": 12,
-    "balanced_side_ft": 8,
-    "depth_inches": 12,
-    "interior_plant_count": 11,
-    "perimeter_plant_count": 9,
-    "drainage_time_hours": None,
-    "gallons_per_year": None,
-}
+# Three depth options with deliberately distinct values so cross-depth leakage is
+# visible. gallons defaults null (the common no-precip run); tests override it.
+def _options():
+    return [
+        {"depth_in": 4, "band": "3-5", "area_sqft": 238,
+         "interior_plants": 111, "perimeter_plants": 24, "advisories": []},
+        {"depth_in": 6, "band": "6-7", "area_sqft": 175,
+         "interior_plants": 79, "perimeter_plants": 20, "advisories": []},
+        {"depth_in": 8, "band": "8", "area_sqft": 112,
+         "interior_plants": 47, "perimeter_plants": 16, "advisories": []},
+    ]
 
 
-def _sizing_entry(design=None, catchment=700, advisories=None):
-    d = dict(_DESIGN)
-    if design:
-        d.update(design)
+def _sizing_entry(catchment=700, advisories=None, gallons=None,
+                  sizing_advisories=None, options=None):
     return {
         "name": "size_garden",
         "input": {"catchment_sa": catchment},
         "output": {
             "recommended": True,
-            "design": d,
+            "sizing": {
+                "options": options if options is not None else _options(),
+                "advisories": sizing_advisories if sizing_advisories is not None else [],
+            },
             "advisories": advisories if advisories is not None else [
                 {"type": "utilities", "severity": "informational", "message": "m"},
             ],
+            "gallons_per_year": gallons,
         },
     }
 
@@ -146,7 +145,7 @@ def _present(summary):
     return {"name": "present_results", "input": {"summary": summary}, "output": None}
 
 
-def test_assemble_populates_fields_and_resolves_summary():
+def test_assemble_populates_fields_and_resolves_per_option_summaries():
     call_log = [
         _sizing_entry(advisories=[
             {"type": "clay_drainage", "severity": "corrective", "message": "m"}]),
@@ -155,45 +154,61 @@ def test_assemble_populates_fields_and_resolves_summary():
         }},
         {"name": "search_guidance", "input": {"query": "clay"},
          "output": {"passages": [{"citation_label": "Oregon"}]}},
-        _present("A {area_sqft} sq ft garden with {interior_plant_count} center plants."),
+        _present("A {area_sqft} sq ft garden with {interior_plants} center plants."),
     ]
     res = app._assemble_results(call_log)
-    assert res["summary"] == "A 70 sq ft garden with 11 center plants."
-    assert res["sizing"]["design"]["area_sqft"] == 70
+    opts = res["sizing"]["options"]
+    assert opts[0]["summary"] == "A 238 sq ft garden with 111 center plants."
+    assert opts[2]["summary"] == "A 112 sq ft garden with 47 center plants."
     assert res["advisories"][0]["type"] == "clay_drainage"
     assert res["plants"]["interior"][0]["common_name"] == "Blue Flag"
-    assert "guidance" not in res  # guidance is no longer a results field
+    assert "summary" not in res            # no top-level summary any more
+    assert "guidance" not in res           # guidance is not a results field
 
 
-def test_summary_has_no_bare_dimension_digits():
-    """Every digit in the rendered summary arrived as a resolved token; a raw
-    summary that is digit-free stays digit-free only via substitution."""
-    subs = app._substitutions(_sizing_entry())
-    raw = ("{area_sqft} sq ft, {depth_inches} in deep, "
-           "{interior_plant_count}/{perimeter_plant_count} plants.")
-    assert not any(ch.isdigit() for ch in raw)  # model wrote zero bare digits
-    resolved = app._resolve_summary(raw, subs)
-    assert resolved == "70 sq ft, 12 in deep, 11/9 plants."
+def test_one_template_renders_three_distinct_summaries():
+    template = "About {depth_in} in deep, {area_sqft} sq ft, {interior_plants} plants."
+    res = app._assemble_results([_sizing_entry(), _present(template)])
+    summaries = [o["summary"] for o in res["sizing"]["options"]]
+    assert summaries == [
+        "About 4 in deep, 238 sq ft, 111 plants.",
+        "About 6 in deep, 175 sq ft, 79 plants.",
+        "About 8 in deep, 112 sq ft, 47 plants.",
+    ]
+    assert len(set(summaries)) == 3        # numerically distinct
+
+
+def test_per_option_allowlist_scopes_to_own_depth():
+    # Each option substitutes ONLY its own values: the 8" summary can never show a
+    # 4" area. Build subs per option and confirm the area tracks the option.
+    entry = _sizing_entry()
+    for opt in entry["output"]["sizing"]["options"]:
+        subs = app._substitutions(entry, opt)
+        assert subs["area_sqft"] == opt["area_sqft"]
+        assert subs["depth_in"] == opt["depth_in"]
+        resolved = app._resolve_summary("{area_sqft} sq ft", subs)
+        assert resolved == f"{opt['area_sqft']} sq ft"
 
 
 def test_referenced_tokens_all_resolve_non_null():
-    subs = app._substitutions(_sizing_entry(
-        design={"drainage_time_hours": 30, "gallons_per_year": 12000}))
+    entry = _sizing_entry(gallons=12000)
+    subs = app._substitutions(entry, entry["output"]["sizing"]["options"][0])
     raw = ("{area_sqft} sq ft; captures {gallons_per_year} gal/yr from "
-           "{catchment_sqft} sq ft; drains in {drainage_time_hours} h.")
+           "{catchment_sqft} sq ft.")
     resolved = app._resolve_summary(raw, subs)
     # No fallback: all referenced tokens were present and non-null.
-    assert resolved == "70 sq ft; captures 12000 gal/yr from 700 sq ft; drains in 30 h."
+    assert resolved == "238 sq ft; captures 12000 gal/yr from 700 sq ft."
 
 
-def test_substitution_dict_is_curated_allowlist_not_design_splat():
-    subs = app._substitutions(_sizing_entry(catchment=850))
+def test_substitution_dict_is_curated_allowlist():
+    entry = _sizing_entry(catchment=850)
+    subs = app._substitutions(entry, entry["output"]["sizing"]["options"][0])
     # catchment comes from the INPUT, under the token name catchment_sqft.
     assert subs["catchment_sqft"] == 850
-    # A design-only key that is NOT an authored token must not be substitutable.
-    assert "sizing_factor" not in subs
+    # An option key that is NOT an authored token must not be substitutable.
+    assert "band" not in subs
     # Referencing it therefore fails the allow-list check -> deterministic fallback.
-    resolved = app._resolve_summary("factor {sizing_factor}", subs)
+    resolved = app._resolve_summary("band {band}", subs)
     assert resolved == app._fallback_summary(subs)
 
 
@@ -205,35 +220,44 @@ def test_advisories_byte_identical_to_tool_output():
     assert res["advisories"] is entry["output"]["advisories"]  # same object, no copy/edit
 
 
+def test_gallons_and_recommended_sit_outside_options():
+    res = app._assemble_results([_sizing_entry(gallons=9000), _present("ok")])
+    assert res["gallons_per_year"] == 9000
+    assert res["recommended"] is True
+    for o in res["sizing"]["options"]:
+        assert "gallons_per_year" not in o
+
+
 def test_incidental_and_untokenized_digits_pass_through():
     """No digit guard: bare digits the model writes are left as-is. Only unknown or
     null tokens route to the fallback."""
-    subs = app._substitutions(_sizing_entry())
-    # An un-tokenized dimension digit is no longer policed -> passes through.
-    assert app._resolve_summary("Your garden is 70 sq ft.", subs) == "Your garden is 70 sq ft."
-    # Valid tokens resolve while incidental non-dimension digits (zone, 811) survive.
+    entry = _sizing_entry()
+    subs = app._substitutions(entry, entry["output"]["sizing"]["options"][0])
+    assert app._resolve_summary("Your garden is 238 sq ft.", subs) == "Your garden is 238 sq ft."
     resolved = app._resolve_summary("A {area_sqft} sq ft garden, Zone 7b, call 811.", subs)
-    assert resolved == "A 70 sq ft garden, Zone 7b, call 811."
+    assert resolved == "A 238 sq ft garden, Zone 7b, call 811."
 
 
 def test_null_token_routes_to_fallback_and_omits_clause():
-    subs = app._substitutions(_sizing_entry())  # drainage_time_hours is None
-    resolved = app._resolve_summary("It drains in {drainage_time_hours} hours.", subs)
+    entry = _sizing_entry()  # gallons_per_year is None
+    opt = entry["output"]["sizing"]["options"][0]
+    subs = app._substitutions(entry, opt)
+    resolved = app._resolve_summary("It captures {gallons_per_year} gallons.", subs)
     fallback = app._fallback_summary(subs)
     assert resolved == fallback
-    # The fallback omits the drainage clause entirely when the value is null.
-    assert "drains in about" not in fallback
-    # ...but includes optional clauses whose values ARE present.
-    subs2 = app._substitutions(_sizing_entry(design={"drainage_time_hours": 30}))
-    assert "drains in about 30 hours" in app._fallback_summary(subs2)
+    # The fallback omits the gallons clause entirely when the value is null.
+    assert "captures roughly" not in fallback
+    # ...but includes it when the value IS present.
+    entry2 = _sizing_entry(gallons=9000)
+    subs2 = app._substitutions(entry2, entry2["output"]["sizing"]["options"][0])
+    assert "captures roughly 9000 gallons" in app._fallback_summary(subs2)
 
 
-def test_prompt_slip_without_sizing_passes_summary_through():
-    """present_results but no size_garden this turn: no design to substitute against,
-    so the raw summary passes through rather than raising."""
+def test_prompt_slip_without_sizing_produces_no_options():
+    """present_results but no size_garden this turn: no options to substitute
+    against, so no summaries are produced rather than raising."""
     res = app._assemble_results([_present("done")])
-    assert res["summary"] == "done"
-    assert "sizing" not in res and "guidance" not in res
+    assert "sizing" not in res and "summary" not in res and "guidance" not in res
 
 
 # --- guidance retrieval failure is non-fatal (guarantee had no other coverage) --
@@ -260,5 +284,6 @@ def test_assemble_tolerates_errored_guidance_entry():
     ]
     res = app._assemble_results(call_log)
     assert "guidance" not in res
-    assert res["sizing"]["design"]["area_sqft"] == 70
-    assert res["summary"] == "Set at 70 sq ft."
+    opts = res["sizing"]["options"]
+    assert opts[0]["area_sqft"] == 238
+    assert opts[0]["summary"] == "Set at 238 sq ft."

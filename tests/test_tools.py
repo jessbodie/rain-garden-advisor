@@ -160,7 +160,33 @@ def test_gate_refuses_unfindable_address(monkeypatch):
     assert result["ok"] is False
 
 
-# --- size_garden advisories ---------------------------------------------------
+# --- size_garden depth options ------------------------------------------------
+
+def test_three_depth_options_with_expected_areas():
+    # 700 sq ft catchment, Silty: area = 700 * factor(band). Distance no longer
+    # feeds area. Oracle areas independently derived: 4"->238, 6"->175, 8"->112.
+    result = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Silty"})
+    options = result["sizing"]["options"]
+    assert [o["depth_in"] for o in options] == [4, 6, 8]
+    assert [o["band"] for o in options] == ["3-5", "6-7", "8"]
+    assert [o["area_sqft"] for o in options] == [238, 175, 112]
+    # Deeper = smaller footprint.
+    assert options[0]["area_sqft"] > options[1]["area_sqft"] > options[2]["area_sqft"]
+    for o in options:
+        assert set(o) == {"depth_in", "band", "area_sqft",
+                          "interior_plants", "perimeter_plants", "advisories"}
+
+
+def test_distance_does_not_change_area():
+    near = dispatch("size_garden", {
+        "catchment_sa": 700, "soil_type": "Silty", "distance": "Less than 10 ft"})
+    far = dispatch("size_garden", {
+        "catchment_sa": 700, "soil_type": "Silty", "distance": "More than 30 ft"})
+    assert [o["area_sqft"] for o in near["sizing"]["options"]] == \
+           [o["area_sqft"] for o in far["sizing"]["options"]]
+
+
+# --- top-level site advisories (unchanged, byte-identical) --------------------
 
 def test_advisory_happy_path_recommended():
     result = dispatch("size_garden", {
@@ -174,11 +200,13 @@ def test_advisory_happy_path_recommended():
         assert set(a) == {"type", "severity", "message"}
 
 
-def test_advisory_clay_is_corrective():
-    result = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Clayey"})
-    clay = [a for a in result["advisories"] if a["type"] == "clay_drainage"]
-    assert clay and clay[0]["severity"] == "corrective"
-    assert result["recommended"] is True  # corrective is not blocking
+def test_clay_advisory_fires_with_and_without_measured_rate():
+    # §6.2: clayey advisory now fires whenever soil is Clayey, rate or not.
+    for extra in ({}, {"perc_rate": "1.5"}):
+        result = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Clayey", **extra})
+        clay = [a for a in result["advisories"] if a["type"] == "clay_drainage"]
+        assert clay and clay[0]["severity"] == "corrective"
+        assert result["recommended"] is True  # corrective is not blocking
 
 
 def test_advisory_blocking_conditions():
@@ -190,27 +218,26 @@ def test_advisory_blocking_conditions():
     assert severities["foundation_setback"] == "blocking"
     assert severities["slope"] == "blocking"
     assert result["recommended"] is False
-    # "Less than 10 ft" is deliberate: it still resolves the <30 ft factor (0.21
-    # for Silty) and sizes a footprint — the blocking advisory does not suppress
-    # the calculation, and it is never a KeyError or a silent default.
-    assert result["design"]["sizing_factor"] == 0.21
-    assert result["design"]["area_sqft"] == 147
+    # Blocking advisories do not suppress the calculation: options are still computed.
+    assert len(result["sizing"]["options"]) == 3
 
 
-def test_low_drainage_is_blocking_and_contingent():
+def test_low_drainage_is_blocking():
     result = dispatch("size_garden", {
         "catchment_sa": 700, "soil_type": "Silty", "perc_rate": "0.3",
     })
     assert result["recommended"] is False
     assert any(a["type"] == "low_drainage" and a["severity"] == "blocking"
                for a in result["advisories"])
-    assert result["design"]["contingent"] is True
+    # contingent flag was removed with the design dict; nothing carries it now.
+    assert "contingent" not in result
 
 
 def test_unknown_soil_uses_clay_factor_and_notes_it():
-    # Omitted soil -> sized with Clayey factor (0.10) but flagged as unknown, not clay.
+    # Omitted soil -> sized with the Clayey column, but flagged unknown, not clay.
+    # Clayey oracle areas at 700 catchment: 4"->301, 6"->224, 8"->140.
     result = dispatch("size_garden", {"catchment_sa": 700, "distance": "More than 30 ft"})
-    assert result["design"]["sizing_factor"] == 0.10
+    assert [o["area_sqft"] for o in result["sizing"]["options"]] == [301, 224, 140]
     types = {a["type"] for a in result["advisories"]}
     assert "unknown_soil" in types
     assert "clay_drainage" not in types  # Unknown never gets the clay advisory
@@ -241,3 +268,72 @@ def test_slope_away_from_house_no_advisory():
 def test_slope_direction_omitted_no_advisory():
     result = dispatch("size_garden", dict(_SLOPE_BASE))
     assert not any(a["type"] == "slope_toward_house" for a in result["advisories"])
+
+
+# --- per-option and sizing-wide advisories ------------------------------------
+
+def _opt_types(option):
+    return {a["type"] for a in option["advisories"]}
+
+
+def test_split_ceiling_is_per_option():
+    # Clayey @ 700: 4"->301 sq ft (over 300, fires), 6"->224 and 8"->140 (don't).
+    result = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Clayey"})
+    o4, o6, o8 = result["sizing"]["options"]
+    assert "split_ceiling" in _opt_types(o4)
+    assert "split_ceiling" not in _opt_types(o6)
+    assert "split_ceiling" not in _opt_types(o8)
+
+
+def test_two_zone_floor_is_per_option():
+    # Sandy @ 60: 4" (area 11) and 6" (area 9) hold a center; 8" (area 5) does not.
+    result = dispatch("size_garden", {"catchment_sa": 60, "soil_type": "Sandy"})
+    o4, o6, o8 = result["sizing"]["options"]
+    assert "two_zone_floor" not in _opt_types(o4)
+    assert "two_zone_floor" not in _opt_types(o6)
+    floor = [a for a in o8["advisories"] if a["type"] == "two_zone_floor"]
+    assert floor and floor[0]["severity"] == "corrective"
+
+
+def test_two_zone_floor_gates_on_unrounded_count():
+    # Sandy @ 40, 4": raw interior count 0.899 rounds to a DISPLAYED 1, but the
+    # floor must still fire because the raw value is < 1.
+    result = dispatch("size_garden", {"catchment_sa": 40, "soil_type": "Sandy"})
+    o4 = result["sizing"]["options"][0]
+    assert o4["interior_plants"] == 1                 # display-rounded up
+    assert "two_zone_floor" in _opt_types(o4)         # raw < 1 still fires
+
+
+def test_floor_and_ceiling_never_co_occur_in_one_option():
+    # Structural invariant: no single option carries both.
+    for cat in (40, 60, 700, 2000):
+        for soil in ("Sandy", "Silty", "Loamy", "Clayey"):
+            result = dispatch("size_garden", {"catchment_sa": cat, "soil_type": soil})
+            for o in result["sizing"]["options"]:
+                t = _opt_types(o)
+                assert not ("split_ceiling" in t and "two_zone_floor" in t)
+
+
+def test_reduction_allowance_fires_only_when_a_ceiling_fires():
+    # Clayey @ 700: 4" exceeds 300 (ceiling), no floor -> allowance present.
+    big = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Clayey"})
+    assert [a["type"] for a in big["sizing"]["advisories"]] == ["reduction_allowance"]
+    # Silty @ 700: no option exceeds 300 -> sizing.advisories is empty.
+    small = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Silty"})
+    assert small["sizing"]["advisories"] == []
+
+
+def test_reduction_allowance_suppressed_when_a_floor_fires():
+    # Sandy @ 60: an option hits the floor, so the allowance is withheld even if a
+    # ceiling were present (defensive; the two conditions don't co-occur naturally).
+    result = dispatch("size_garden", {"catchment_sa": 60, "soil_type": "Sandy"})
+    assert not any(a["type"] == "reduction_allowance"
+                   for a in result["sizing"]["advisories"])
+
+
+def test_gallons_per_year_outside_options():
+    result = dispatch("size_garden", {
+        "catchment_sa": 700, "soil_type": "Silty", "total_precip_yr": 40})
+    assert result["gallons_per_year"] == 17455  # round(700 * 144 * 40 * 0.004329)
+    for o in result["sizing"]["options"]:
+        assert "gallons_per_year" not in o

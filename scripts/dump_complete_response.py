@@ -146,7 +146,7 @@ app._client = FakeClient([
         # injects the deterministic values, exercising the happy token path rather
         # than the digit-guard fallback.
         tu("present_results", {"summary": (
-            "A {area_sqft} sq ft rain garden, {depth_inches} in deep, for your "
+            "A {area_sqft} sq ft rain garden, about {depth_in} in deep, for your "
             "{catchment_sqft} sq ft catchment. The interior and perimeter plant "
             "lists are matched to your hardiness zone. Amend the clay-leaning soil "
             "with compost and add an overflow outlet that directs water away from "

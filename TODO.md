@@ -70,6 +70,51 @@ Only `{roof_sqft}` is adoptable; the ~1,700 figure never is.
 
 ---
 
+## Implemented: Depth-Options Sizing Redesign
+Implemented 2026-07-04. Verified offline (full suite green). Supersedes the
+"[v2] Depth selection and depth/footprint coupling" deferral below.
+
+**What shipped**
+- Single soil × depth-band factor table (`sizing.SIZE_FACTORS_BY_DEPTH`, transcribed
+  cell-for-cell from `data/RainGarden-SizeFactors.csv`, verified by
+  `test_factor_derivation.py`), applied universally. `area = catchment × factor(soil, band)`.
+- **Distance no longer feeds area** — it is advisory-only (setback). The `>30 ft`
+  table, the rate-table override, and `recommended_depth`/`GEOMETRY_TABLE` are removed
+  from `sizing.py` (`soil_sizing_factor`, `rate_sizing_factor`, `resolve_sizing_factor`
+  all gone).
+- **Three depth options always computed** — about 4"/6"/8" (bands 3-5"/6-7"/8"). Each
+  option carries its own `area_sqft`, `interior_plants`, `perimeter_plants`, `advisories`,
+  and a `summary`. Deeper = smaller factor = more compact. Unknown soil → Clayey column.
+- **Contract:** `size_garden` now returns `{recommended, sizing:{options[], advisories[]},
+  advisories[], gallons_per_year}`. `results.summary` (top-level) is retired; the depth
+  toggle is pure frontend view state (all three ship in one `/chat` response).
+- **Advisory buckets:** existing site/viability advisories stay top-level, byte-identical
+  (clayey now fires whenever soil is Clayey, rate or not). `sizing.advisories` holds only
+  the new 30%-reduction allowance (fires only when a split-ceiling fires and no floor does).
+  Per-option `options[i].advisories` hold the 300 sq ft split-ceiling and the two-zone
+  floor (gated on the **unrounded** interior count).
+- **Summaries:** the model authors ONE tokenized paragraph; `_assemble_results`
+  substitutes it three times, once per option, against a per-option-scoped allow-list
+  (`{depth_in} {area_sqft} {interior_plants} {perimeter_plants}` per-depth;
+  `{catchment_sqft} {gallons_per_year}` shared). No cross-depth leakage by construction.
+- Dropped the `contingent`/`contingent_on` design flag (its container was removed; the
+  sub-0.5 in/hr case is fully carried by the `low_drainage` blocking advisory +
+  `recommended=False`; no live consumer).
+
+**Deferred from this redesign**
+- **Drain-down time (per depth):** compute `depth ÷ infiltration_rate` per option (a
+  function of selected depth, not area); surface whenever an infiltration rate is
+  available. `sizing.drainage_time` is kept for this. Open question: ship a soil→default
+  infiltration-rate table (CSV already carries typical perc ranges) so drain-down can
+  display without a user-entered rate? The clayey drainage advisory (0.5 in/hr threshold)
+  ships live but is bundled here for later reevaluation.
+- **Elongated vs. balanced shape:** ask the user whether the garden is elongated (2:1) or
+  balanced; compute perimeter and interior/perimeter counts accordingly. Until then counts
+  assume the elongated 2:1 shape, and length/width are not surfaced.
+Added: 2026-07-04
+
+---
+
 ## Deferrals (cut from v1, planned for v2)
 
 **Precipitation dashboard charts**
@@ -89,12 +134,17 @@ Added: 2026-06-25
 ## Known Issues
 
 
-**gallons_per_year computes from catchment × total_precip_yr × constant — no perc/soil dependency**
-gallons_per_year should compute from catchment × total_precip_yr × constant, with
-no perc/soil dependency; it is currently null when soil is unknown. Decouple it from
-the perc-rate branch. Chat-lane spec item, not frontend. (Until fixed, the summary's
-{gallons_per_year} clause is simply omitted on null runs, per the reference-only-
-present-values rule.)
+**gallons_per_year — soil/perc decoupling already holds; null only without precip**
+Corrected 2026-07-04. Re-verified against `_size_garden`: `gallons_per_year` is
+`gallons_diverted(catchment_sa, total_precip_yr)` gated ONLY on `total_precip_yr`, with
+no soil or perc-rate dependency. It is NOT null when soil is unknown, and NOT null on the
+low-perc branch (confirmed by dispatch: unknown-soil + precip -> a number). The earlier
+"null when soil is unknown / decouple from the perc-rate branch" framing no longer
+matches the code. The only residual: `gallons_per_year` is null when precipitation stats
+weren't supplied to `size_garden` (the model is prompted to always pass them from
+get_precipitation_stats; a null therefore means those stats were missing/failed, a
+model-reliability concern, not a compute bug). On a null run the summary's
+{gallons_per_year} clause is simply omitted, per the reference-only-present-values rule.
 
 **Negative interior area on tiny gardens**
 The notebook's plant-count formula produces a negative interior area when the
@@ -102,14 +152,15 @@ rain garden is very small (roughly < 5 sq ft). `sizing.py` now guards against
 this (clamps to 0), but the upstream cause — no minimum viable garden size
 check — is unaddressed. A garden below ~9 sq ft (the geometry table minimum)
 should probably return a warning rather than silently produce edge-case counts.
+Partly addressed 2026-07-04: an option whose interior can't hold one plant now fires
+the per-option `two_zone_floor` advisory (single-zone perimeter planting). A hard
+minimum-viable-size check on the whole garden is still unaddressed.
 Added: 2026-06-25
 
-**getDepth saturates for real-world catchments**
-`recommended_depth` looks up the closest row in the geometry table, which tops
-out at 36 sq ft min-area → 12" depth. Any garden >= ~36 sq ft clamps to 12",
-so depth is effectively constant for essentially all real catchments. Faithful
-to the notebook, but the depth output carries no information above that size.
-Revisit whether depth should scale (or be dropped) for larger gardens.
+**getDepth saturates for real-world catchments** — RESOLVED 2026-07-04
+Obsolete: depth is no longer an area-derived output. `recommended_depth` and the
+geometry table were removed; depth is now a user tradeoff across three fixed options
+(about 4"/6"/8"). See "Implemented: Depth-Options Sizing Redesign" above.
 Added: 2026-06-29
 
 **Agent-layer and FastAPI tests missing**
@@ -122,41 +173,13 @@ completion contract, awaiting_user/complete/error statuses) and for the `/chat`
 endpoint (seed vs. continue via the location preamble, out-of-region, error tiers).
 Added: 2026-06-30
 
-## [v2] Depth selection and depth/footprint coupling
+## [DONE 2026-07-04] Depth selection and depth/footprint coupling
 
-Current behavior:
-- Ponding depth is a *dependent output*, not an input. getDepth(area) returns
-  the geometry-table depth whose Min Area is closest to the computed area.
-- It saturates at 12" above 36 sq ft, so for essentially all real catchments
-  depth pins at 12" and is effectively constant.
-- Footprint (length / width / balanced side) is computed directly from area
-  (sqrt(area/2), etc.), independent of depth. Depth and footprint are parallel
-  outputs of area, not coupled — choosing a depth cannot currently change the
-  footprint. (NOTE: this contradicts the intuition that "depth impacts
-  dimensions"; it currently does not.)
-- The single sizing_factor bakes in an implicit depth assumption (notebook
-  averaged the 6-7" and 8" bands), which may disagree with the depth_inches the
-  geometry table reports for the same garden.
-
-Requirement gap:
-- Depth should be selectable, and should trade against footprint (deeper basin
-  -> smaller footprint for the same storage). Offer dimension options by depth.
-
-v2 implementation notes:
-- The depth-banded factors already exist in data/RainGarden-SizeFactors.csv
-  (3-5", 6-7", 8" columns). Each soil -> three (depth, factor) pairs ->
-  three (depth, area, footprint) options. Feed these instead of one factor.
-- Caveats:
-  * Depth bands exist only for the <30 ft distance regime. The >30 ft factors
-    are single values, not depth-banded — no data backing for depth-as-input on
-    far gardens. Resolve before exposing the feature there.
-  * Confirm which column/aggregation the committed sizing_factor uses, to know
-    what depth today's single number implies and whether it matches the reported
-    depth_inches.
-  * Reconcile getDepth (geometry table) against the factor's implied depth so
-    the reported depth and the footprint describe the same basin.
-- Prompt impact: when size_garden returns depth options, the system prompt's
-  results section must present them.
+Implemented — see "Implemented: Depth-Options Sizing Redesign" above. Depth is now a
+user-selectable tradeoff: `size_garden` returns three (depth, area, plant-count) options
+from the CSV's 3-5"/6-7"/8" bands, and the system prompt presents them. The distance
+caveat that blocked this ("depth bands exist only for the <30 ft regime") is moot now
+that Table 1 (<30 ft) is applied universally and distance no longer feeds area.
 
 
 **Plant-count geometry doesn't sanity-check small gardens**

@@ -24,7 +24,9 @@ All calculation logic stays in Python. It was written in Python; keep it there.
 Do NOT port any calculation logic to JavaScript.
 
 **Deterministic core — six clean modules, each independently testable:**
-- `src/rain_garden/sizing.py` — garden area, dimensions, depth, plant counts ✅
+- `src/rain_garden/sizing.py` — garden area (soil × depth-band factor), dimensions,
+  plant counts ✅ (depth is a user tradeoff across three options, not area-derived —
+  see the depth-options note below)
 - `src/rain_garden/precipitation.py` — three weather scalars from Open-Meteo ✅
 - `src/rain_garden/geocode.py` — address → lat/lon via Nominatim ✅
 - `src/rain_garden/hardiness.py` — USDA hardiness zone via RapidAPI ✅
@@ -37,6 +39,23 @@ deterministic site advisories (not the LLM). `size_garden` takes two *separate* 
 `slope_ok` (grade/steepness, ≤12%; false → blocking advisory) and `slopes_away_from_house`
 (direction; false → a *corrective* advisory to build an overflow outlet away from the foundation —
 does not block, `recommended` stays true). Omitting a slope input fires no advisory. ✅
+
+**Depth-options sizing (`size_garden` output shape).** ✅ `area = catchment ×
+factor(soil, depth_band)` from the single soil×depth-band table
+(`sizing.SIZE_FACTORS_BY_DEPTH`, transcribed from `data/RainGarden-SizeFactors.csv`),
+applied universally. Distance no longer feeds area (advisory-only setback). `size_garden`
+returns `{recommended, sizing:{options[], advisories[]}, advisories[], gallons_per_year}`:
+- `sizing.options[]` — **exactly three**, about 4"/6"/8" (bands 3-5"/6-7"/8"). Each:
+  `depth_in, band, area_sqft, interior_plants, perimeter_plants, summary` (per-option,
+  token-injected — see below), and `advisories[]` (depth-*dependent*: the 300 sq ft
+  split-ceiling; the two-zone floor, gated on the **unrounded** interior count → single-zone
+  perimeter planting). Deeper = smaller factor = more compact. Unknown soil → Clayey column.
+- `sizing.advisories[]` — depth-*invariant* sizing advisory: only the 30%-reduction
+  allowance, and only when a ceiling fired and no floor did.
+- top-level `advisories[]` — existing site/viability advisories, byte-identical (clayey
+  now fires whenever soil is Clayey, rate or not). `gallons_per_year` is depth-invariant.
+- The old single-`design` shape, the distance/rate factor tables, `recommended_depth`, and
+  the `contingent` flag are retired.
 
 **LLM layer sits on top of the completed deterministic core.**
 - `agent.py` — the agent loop over the Anthropic Messages API. ✅
@@ -58,6 +77,22 @@ does not block, `recommended` stays true). Omitting a slope input fires no advis
   Seed vs. continue is discriminated by `LOCATION_PREAMBLE_MARKER` in `messages`,
   so geocoding runs exactly once per conversation.
 - `prompts.py` — `SYSTEM_PROMPT`, passed verbatim as the API `system` parameter.
+
+**Deployment: Render + CORS + `/warmup`.** ✅ The API is deployed on Render at
+`https://rain-garden-advisor-api.onrender.com`; the browser frontend (`jessbodie.com`,
+served from Vercel) calls it cross-origin. `app.py` adds `CORSMiddleware` scoped to the
+`https://jessbodie.com` origin only (no `"*"`, no credentials — production-only; Vercel
+preview subdomains are deliberately excluded for now). `POST /warmup` forces the RAG lazy
+singletons (embedder + corpus index) to load early via one throwaway `search()` call, so
+the first real `search_guidance` dispatch doesn't eat the ONNX-model load latency; it's
+idempotent and its atomic success means container-awake + embedder + index all loaded.
+- **Known accepted tradeoff — first-`/chat` cold-start race.** The frontend's address
+  submit does NOT wait for `/warmup` to resolve before firing the first `/chat`. This is
+  intentional: any request to the Render service wakes the container regardless of which
+  endpoint receives it, so gating submit on `/warmup` adds a wait state without changing
+  the outcome (the container ends up warm either way). The per-message, time-based loading
+  state absorbs whatever cold-start delay remains. Do not add a "wait for `/warmup`" gate
+  without discussing first — it will look like a missing feature but isn't one.
 
 **Roof catchment estimate (Google Solar API) — a deterministic reference number
 folded into the catchment question.** ✅ `catchment_sa` is collected conversationally
@@ -109,22 +144,21 @@ deterministic filter in plants.py. Do not apply RAG to structured data.
   The `search_guidance` `call_log` entry is retained server-side (traceability,
   About-section sourcing), but retrieved prose never feeds a tool input or a
   computed value, and never surfaces as its own results field.
-- Numbers in the summary are **token-injected deterministically**, under a strict
-  taxonomy:
-  - **Computed deterministic values** (area, depth, elongated/balanced widths and
-    lengths, interior/perimeter plant counts, catchment, gallons, drainage time)
-    are always injected as named `{tokens}` (`{area_sqft}`, `{gallons_per_year}`,
-    `{drainage_time_hours}`, …) — never digits, never qualitative words. The model
-    authors prose with the tokens; `_assemble_results` substitutes the exact
-    compute-tool values, so no *computed* garden value originates in model prose. A
-    null value drops its whole clause (the model omits the token). A summary that
-    references an unknown or null-valued token falls back to a fully code-authored
-    template.
+- Numbers in the summary are **token-injected deterministically, per depth option**,
+  under a strict taxonomy. The model authors ONE unified summary paragraph; on
+  completion `_assemble_results` substitutes it **three times**, once per depth option,
+  against a **per-option-scoped allow-list**, writing `options[i].summary` — so the same
+  paragraph becomes three numerically distinct summaries (no cross-depth leakage by
+  construction). There is no top-level `results.summary`.
+  - **Computed deterministic values** are always injected as named `{tokens}` — never
+    digits, never qualitative words. Per-depth tokens: `{depth_in}`, `{area_sqft}`,
+    `{interior_plants}`, `{perimeter_plants}`. Shared (depth-invariant): `{catchment_sqft}`,
+    `{gallons_per_year}`. Length/width are **not** surfaced; drain-down timing is deferred
+    (see TODO). A null value drops its whole clause (the model omits the token). A summary
+    referencing an unknown or null-valued token falls back to a fully code-authored,
+    per-option template.
   - **Guidance-derived numbers** are always qualitative ("drains within a day or
     two"), never digits — those are the only numbers expressed in words.
-  - A single physical quantity (e.g. drainage timing) may have both a computed
-    token and a guidance mention; **prefer the computed token** and do not
-    numerically paraphrase the guidance version.
   - Incidental non-dimension digits (a hardiness zone like "7b", the 811 dig line)
     are left as written — there is no digit scan.
   Advisories pass through byte-identical from the `size_garden` output — the AI

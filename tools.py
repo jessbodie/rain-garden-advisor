@@ -222,10 +222,10 @@ TOOLS = [
     {
         "name": "size_garden",
         "description": (
-            "Compute the recommended rain garden size, dimensions, depth, plant counts, "
-            "and site advisories from the catchment area and site conditions. Pass "
-            "threshold_precip_rate and total_precip_yr from get_precipitation_stats to "
-            "also get drainage time and annual gallons diverted."
+            "Compute the rain garden design from the catchment area and site conditions. "
+            "Returns three depth options (about 4, 6, and 8 inches), each with its own "
+            "area and plant counts, plus site advisories. Pass total_precip_yr from "
+            "get_precipitation_stats to also get the annual gallons diverted."
         ),
         "input_schema": {
             "type": "object",
@@ -260,7 +260,10 @@ TOOLS = [
                 "distance": {
                     "type": "string",
                     "enum": ["More than 30 ft", "10-30 ft", "Less than 10 ft"],
-                    "description": "Distance of the planned garden from the house foundation.",
+                    "description": (
+                        "Distance of the planned garden from the house foundation. Used "
+                        "only for the setback advisory (does not change the garden size)."
+                    ),
                 },
                 "slope_ok": {
                     "type": "boolean",
@@ -280,7 +283,10 @@ TOOLS = [
                 },
                 "threshold_precip_rate": {
                     "type": "number",
-                    "description": "From get_precipitation_stats; enables drainage-time output.",
+                    "description": (
+                        "From get_precipitation_stats. Accepted for forward compatibility "
+                        "(per-depth drain-down timing); not currently reflected in output."
+                    ),
                 },
                 "total_precip_yr": {
                     "type": "number",
@@ -383,7 +389,7 @@ def _advisories(determined_soil, distance, slope_ok, slopes_away_from_house, per
                 "refine — usually shrink — this estimate."
             ),
         })
-    if determined_soil == "Clayey" and parsed_rate is None:
+    if determined_soil == "Clayey":
         out.append({
             "type": "clay_drainage", "severity": "corrective",
             "message": "Clayey soil: verify drainage is at least 0.5 in/hr; amend until it is.",
@@ -440,45 +446,79 @@ def _size_garden(
     sizing_soil = "Clayey" if determined_soil == "Unknown" else determined_soil
 
     parsed_rate = sizing.parse_perc_rate(perc_rate)
-    factor = sizing.resolve_sizing_factor(sizing_soil, distance, parsed_rate)
-    area = sizing.rain_garden_area(catchment_sa, factor)
-    dims = sizing.garden_dimensions(area)
-    counts = sizing.plant_counts(dims["length"], dims["width"], area)
 
-    drainage_time = None
-    if parsed_rate is not None and threshold_precip_rate is not None:
-        drainage_time = sizing.drainage_time(
-            catchment_sa, area, threshold_precip_rate, parsed_rate
-        )
+    # Three depth options, always computed. Distance no longer selects a factor
+    # (advisory-only now); depth is the user tradeoff — deeper = smaller footprint.
+    options = []
+    for depth_in in sizing.DEPTH_OPTIONS:
+        band = sizing.depth_band(depth_in)
+        factor = sizing.size_factor(sizing_soil, band)
+        area = sizing.rain_garden_area(catchment_sa, factor)
+        dims = sizing.garden_dimensions(area)
+        counts = sizing.plant_counts(dims["length"], dims["width"], area)
+        # Gate the two-zone floor on the RAW interior count, then round for display:
+        # a raw 0.5-0.99 must still fire the floor even though it displays as "1".
+        interior_raw = counts["interior_count"]
+        interior_plants = round(interior_raw)
+        perimeter_plants = round(counts["outer_count"])
+        area_sqft = round(area)
+
+        opt_adv = []
+        if area_sqft > 300:
+            opt_adv.append({
+                "type": "split_ceiling", "severity": "informational",
+                "message": (
+                    "At over 300 sq ft this is large for a single basin — consider "
+                    "dividing it into two or more smaller rain gardens."
+                ),
+            })
+        if interior_raw < 1:
+            opt_adv.append({
+                "type": "two_zone_floor", "severity": "corrective",
+                "message": (
+                    "Too small for a separate wetter center: plant this as a single "
+                    "zone using the perimeter (medium-moisture) plant list only."
+                ),
+            })
+        options.append({
+            "depth_in": depth_in,
+            "band": band,
+            "area_sqft": area_sqft,
+            "interior_plants": interior_plants,
+            "perimeter_plants": perimeter_plants,
+            "advisories": opt_adv,
+        })
+
     gallons = None
     if total_precip_yr is not None:
         gallons = sizing.gallons_diverted(catchment_sa, total_precip_yr)
-
-    design = {
-        "sizing_factor": factor,
-        "area_sqft": round(area),
-        "elongated_width_ft": round(dims["width"]),
-        "elongated_length_ft": round(dims["length"]),
-        "balanced_side_ft": round(dims["side"]),
-        "depth_inches": sizing.recommended_depth(area),
-        "interior_plant_count": round(counts["interior_count"]),
-        "perimeter_plant_count": round(counts["outer_count"]),
-        "drainage_time_hours": drainage_time,
-        "gallons_per_year": gallons,
-    }
 
     advisories = _advisories(
         determined_soil, distance, slope_ok, slopes_away_from_house, perc_rate, parsed_rate
     )
     recommended = not any(a["severity"] == "blocking" for a in advisories)
 
-    # Sub-0.5 drainage: the footprint is provisional, never a confident
-    # recommendation. (Pinned — the notebook ran area on a stale factor here.)
-    if parsed_rate is not None and 0 < parsed_rate < 0.5:
-        design["contingent"] = True
-        design["contingent_on"] = "drainage improved to >= 0.5 in/hr"
+    # 30%-smaller allowance: a pressure-release valve for users whose recommended
+    # garden won't fit. Only meaningful when an option is actually too big (ceiling
+    # fired) and never against an already-too-small garden (floor fired).
+    any_ceiling = any(a["type"] == "split_ceiling" for o in options for a in o["advisories"])
+    any_floor = any(a["type"] == "two_zone_floor" for o in options for a in o["advisories"])
+    sizing_advisories = []
+    if any_ceiling and not any_floor:
+        sizing_advisories.append({
+            "type": "reduction_allowance", "severity": "informational",
+            "message": (
+                "Any of these can be shrunk by up to 30% and still control about 90% "
+                "of the yearly runoff — handy if the full size won't fit your yard."
+            ),
+        })
 
-    return {"recommended": recommended, "design": design, "advisories": advisories}
+    return {
+        "recommended": recommended,
+        "sizing": {"options": options, "advisories": sizing_advisories},
+        "advisories": advisories,
+        "gallons_per_year": gallons,
+    }
 
 
 # --- Dispatch ----------------------------------------------------------------
