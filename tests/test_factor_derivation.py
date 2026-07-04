@@ -1,10 +1,8 @@
-"""Verify the "Less than 30 ft" soil sizing factors are derived from the source
-CSV by SOIL-TYPE KEY (not row position), and match the values inlined in
-rain_garden.sizing.
+"""Verify sizing.SIZE_FACTORS_BY_DEPTH matches the source CSV cell-for-cell,
+keyed by soil-type (not row position), so a reordered CSV cannot mis-assign.
 
-The notebook merges the more-than-30 and less-than-30 tables by row position,
-which would mis-assign factors if the CSV rows were reordered. Here we join on
-the soil-type key, so a reordered CSV cannot mis-assign.
+The three depth bands in the CSV ('3-5" deep', '6-7" deep', '8" deep') map to the
+table keys '3-5', '6-7', '8'.
 """
 
 import csv
@@ -18,29 +16,10 @@ from rain_garden import sizing
 # so the test confirms the correct file is read regardless of CWD.
 CSV_PATH = Path(__file__).resolve().parents[1] / "data" / "RainGarden-SizeFactors.csv"
 
-# Exact expected derived values for every soil row in the CSV. Some are
-# float-rounding edge cases: (0.15 + 0.08) / 2 -> 0.11 (down), (0.25 + 0.16) / 2
-# -> 0.21 (up). All four are first-class, inlined soil types in sizing.py.
-EXPECTED_LESS_THAN_30 = {
-    "Sandy": 0.11,
-    "Loamy": 0.20,
-    "Silty": 0.21,
-    "Clayey": 0.26,
-}
+# CSV column header -> table band key.
+_BAND_COLUMNS = {'3-5" deep': "3-5", '6-7" deep': "6-7", '8" deep': "8"}
 
-# Soils that sizing.py models as first-class inlined constants (here, all of them).
-SIZING_MODELED_SOILS = tuple(EXPECTED_LESS_THAN_30)
-
-
-def _derive_by_key(rows) -> dict[str, float]:
-    """Build {soil_type: less_than_30_factor} keyed by the 'Type of Soil' column."""
-    derived = {}
-    for row in rows:
-        soil = row["Type of Soil"].strip()
-        d_6_7 = float(row['6-7" deep'])
-        d_8 = float(row['8" deep'])
-        derived[soil] = round((d_6_7 + d_8) / 2, 2)
-    return derived
+SOILS = ("Sandy", "Loamy", "Silty", "Clayey")
 
 
 def _read_rows() -> list[dict]:
@@ -48,23 +27,29 @@ def _read_rows() -> list[dict]:
         return list(csv.DictReader(f))
 
 
+def _factors_from_csv(rows) -> dict[str, dict[str, float]]:
+    """Build {soil: {band: factor}} keyed by the 'Type of Soil' column."""
+    out = {}
+    for row in rows:
+        soil = row["Type of Soil"].strip()
+        out[soil] = {band: float(row[col]) for col, band in _BAND_COLUMNS.items()}
+    return out
+
+
 def test_csv_file_exists():
     assert CSV_PATH.is_file(), f"expected CSV at {CSV_PATH}"
 
 
-def test_derived_factors_match_expected_exactly():
-    derived = _derive_by_key(_read_rows())
-    assert derived == EXPECTED_LESS_THAN_30
+def test_table_matches_csv_cell_for_cell():
+    assert _factors_from_csv(_read_rows()) == sizing.SIZE_FACTORS_BY_DEPTH
 
 
-@pytest.mark.parametrize("soil", SIZING_MODELED_SOILS)
-def test_derived_factor_matches_inlined_constant(soil):
-    derived = _derive_by_key(_read_rows())
-    assert sizing.SOIL_SIZING_FACTORS[soil]["Less than 30 ft"] == derived[soil]
+@pytest.mark.parametrize("soil", SOILS)
+def test_every_modeled_soil_present(soil):
+    assert soil in sizing.SIZE_FACTORS_BY_DEPTH
+    assert set(sizing.SIZE_FACTORS_BY_DEPTH[soil]) == {"3-5", "6-7", "8"}
 
 
 def test_key_join_is_order_independent():
     rows = _read_rows()
-    forward = _derive_by_key(rows)
-    reversed_map = _derive_by_key(list(reversed(rows)))
-    assert forward == reversed_map == EXPECTED_LESS_THAN_30
+    assert _factors_from_csv(rows) == _factors_from_csv(list(reversed(rows)))
