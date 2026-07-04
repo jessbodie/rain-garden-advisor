@@ -78,6 +78,22 @@ returns `{recommended, sizing:{options[], advisories[]}, advisories[], gallons_p
   so geocoding runs exactly once per conversation.
 - `prompts.py` — `SYSTEM_PROMPT`, passed verbatim as the API `system` parameter.
 
+**Deployment: Render + CORS + `/warmup`.** ✅ The API is deployed on Render at
+`https://rain-garden-advisor-api.onrender.com`; the browser frontend (`jessbodie.com`,
+served from Vercel) calls it cross-origin. `app.py` adds `CORSMiddleware` scoped to the
+`https://jessbodie.com` origin only (no `"*"`, no credentials — production-only; Vercel
+preview subdomains are deliberately excluded for now). `POST /warmup` forces the RAG lazy
+singletons (embedder + corpus index) to load early via one throwaway `search()` call, so
+the first real `search_guidance` dispatch doesn't eat the ONNX-model load latency; it's
+idempotent and its atomic success means container-awake + embedder + index all loaded.
+- **Known accepted tradeoff — first-`/chat` cold-start race.** The frontend's address
+  submit does NOT wait for `/warmup` to resolve before firing the first `/chat`. This is
+  intentional: any request to the Render service wakes the container regardless of which
+  endpoint receives it, so gating submit on `/warmup` adds a wait state without changing
+  the outcome (the container ends up warm either way). The per-message, time-based loading
+  state absorbs whatever cold-start delay remains. Do not add a "wait for `/warmup`" gate
+  without discussing first — it will look like a missing feature but isn't one.
+
 **Roof catchment estimate (Google Solar API) — a deterministic reference number
 folded into the catchment question.** ✅ `catchment_sa` is collected conversationally
 (it was removed from the pre-chat `ChatRequest`; address stays pre-chat). When the

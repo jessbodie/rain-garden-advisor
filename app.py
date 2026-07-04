@@ -26,10 +26,12 @@ load_dotenv(find_dotenv(usecwd=True))
 
 import anthropic  # noqa: E402  — after load_dotenv
 from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from agent import last_assistant_text, run_agent  # noqa: E402
+from rain_garden.retrieval import search  # noqa: E402
 from rain_garden.roofarea import estimate_roof_area  # noqa: E402
 from tools import (  # noqa: E402
     LOCATION_PREAMBLE_MARKER,
@@ -40,6 +42,20 @@ from tools import (  # noqa: E402
 )
 
 app = FastAPI(title="Rain Garden Advisor")
+
+# The browser frontend (jessbodie.com, served from Vercel) calls this API cross-origin.
+# Scoped tight: the production origin only (no "*" — that breaks credentialed requests and
+# isn't the pattern here), only the methods/headers /chat and /warmup actually use. The
+# OPTIONS preflight is answered by the middleware itself, so allow_methods lists only POST.
+# allow_credentials is left at its default (False): no cookies/auth are in play, which is
+# what keeps the explicit-origin allowlist valid. Vercel preview subdomains are excluded
+# (production-only for now).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://jessbodie.com"],
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
+)
 
 # One client for the process — reuses the connection pool across requests. The
 # sync handler runs in FastAPI's threadpool, so concurrent requests are fine.
@@ -310,3 +326,28 @@ def chat(req: ChatRequest):
         results=results,
         roof_sqft=roof_sqft,
     )
+
+
+@app.post("/warmup")
+def warmup():
+    """Force the RAG lazy singletons to load on a cheap out-of-band request.
+
+    The embedder and corpus index are independent lazy singletons that today only
+    populate when ``search_guidance`` first dispatches (the terminal turn of a real
+    conversation) — so that ONNX-model load latency would otherwise land on a user.
+
+    This calls ``search()`` with a throwaway canary query so the warm path is, by
+    construction, identical to what the first real ``search_guidance`` dispatch does —
+    rather than reimplementing the load sequence (``_get_embedder()`` + ``load_index()``)
+    and risking silent drift. One ``search()`` call populates both singletons:
+      - ``load_index()``    -> ``_index_cache``     (embeddings .npy + chunks .jsonl)
+      - ``_get_embedder()`` -> ``_shared_embedder`` (OnnxEmbedder / ONNX session)
+
+    Idempotent: subsequent hits — from /warmup or any real search_guidance call in the
+    same process — reuse the process-level globals (a cheap no-op). Exceptions are NOT
+    swallowed: the warmup promise is atomic (container awake + embedder + index all
+    loaded), so it must resolve iff ``search()`` completed once. A missing/corrupt
+    artifact 500-ing here is the correct signal, not something to mask as success.
+    """
+    search("rain garden depth")  # result discarded; the call is the side effect
+    return {"status": "warm"}
