@@ -7,54 +7,34 @@ dependencies, and no I/O. Values the notebook derives from out-of-scope
 precipitation data (the one-hour extreme precipitation rate and the annual
 precipitation total) are passed in as explicit parameters.
 
-Lookup tables below are transcribed from the notebook. The soil sizing factors
-for the "Less than 30 ft" distance are derived in the notebook from
-``data/RainGarden-SizeFactors.csv`` as ``round((d_6_7 + d_8) / 2, 2)`` per soil
-type; those results are precomputed and inlined here so this module reads no CSV
-at runtime.
+The soil x depth-band factor table below is transcribed cell-for-cell from
+``data/RainGarden-SizeFactors.csv`` (UW-Extension Table 1, rain gardens < 30 ft
+from the downspout). It is applied universally: distance from the foundation no
+longer selects a factor (it is advisory-only now), and depth is a user tradeoff
+across three fixed options rather than a value derived from the area.
 """
 
 from __future__ import annotations
 
 import math
 
-# --- Constants and lookup tables (transcribed from the notebook) -------------
+# --- Constants and lookup tables ---------------------------------------------
 
-#: Soil-type sizing factors keyed by distance from the foundation.
-#: "More than 30 ft" column: Washington, D.C. DOEE rain garden size factors
-#: (Sandy/Silty/Clayey). Loam has no DOEE value; 0.05 is chosen to reflect its
-#: slightly-better-than-silt drainage (loam perc 1.02-2.41 vs silt 0.5-2 in/hr).
-#: "Less than 30 ft" column: precomputed from data/RainGarden-SizeFactors.csv as
-#: round((6-7" deep + 8" deep) / 2, 2) per soil type.
-SOIL_SIZING_FACTORS: dict[str, dict[str, float]] = {
-    "Sandy": {"More than 30 ft": 0.03, "Less than 30 ft": 0.11},
-    "Loamy": {"More than 30 ft": 0.05, "Less than 30 ft": 0.20},
-    "Silty": {"More than 30 ft": 0.06, "Less than 30 ft": 0.21},
-    "Clayey": {"More than 30 ft": 0.10, "Less than 30 ft": 0.26},
-}
+#: The three depth options always offered, in displayed inches (approximate: a
+#: hand-dug basin isn't uniform, and 4" and 5" both fall in the 3-5" band).
+DEPTH_OPTIONS: tuple[int, ...] = (4, 6, 8)
 
-#: Sizing factors based on measured infiltration (percolation) rate.
-#: Each row is (min_rate, max_rate, sizing_factor); a rate matches when
-#: min_rate <= rate <= max_rate. Source: 5 Counties rain garden guide, p.5.
-RATE_SIZING_TABLE: tuple[tuple[float, float, float], ...] = (
-    (0.5, 0.9, 0.09),
-    (1.0, 1.4, 0.05),
-    (1.5, 1.9, 0.04),
-    (2.0, 5.9, 0.03),
-    (6.0, 11.9, 0.02),
-    (12.0, 18.0, 0.01),
-)
+#: Displayed depth (inches) -> CSV depth-band key.
+_DEPTH_BAND: dict[int, str] = {4: "3-5", 6: "6-7", 8: "8"}
 
-#: Minimum rain garden geometry: ponding depth (inches) -> minimum area (sq ft).
-#: Source: 5 Counties rain garden guide, p.5.
-GEOMETRY_TABLE: dict[int, float] = {
-    6: 9.0,
-    7: 12.3,
-    8: 16.0,
-    9: 20.3,
-    10: 25.0,
-    11: 30.3,
-    12: 36.0,
+#: Soil x depth-band sizing factors, transcribed from
+#: data/RainGarden-SizeFactors.csv. area = catchment_area * factor(soil, band).
+#: Deeper band -> smaller factor -> more compact footprint.
+SIZE_FACTORS_BY_DEPTH: dict[str, dict[str, float]] = {
+    "Sandy": {"3-5": 0.19, "6-7": 0.15, "8": 0.08},
+    "Loamy": {"3-5": 0.32, "6-7": 0.24, "8": 0.15},
+    "Silty": {"3-5": 0.34, "6-7": 0.25, "8": 0.16},
+    "Clayey": {"3-5": 0.43, "6-7": 0.32, "8": 0.20},
 }
 
 #: Gallons of water in a 1-inch-deep layer over 1 square inch of area.
@@ -65,17 +45,6 @@ PLANT_WIDTH_FT = 1.33
 
 #: Percolation rates above this are treated as data-entry errors and capped.
 MAX_PERC_RATE = 18.0
-
-#: Input soil-type labels mapped to the key used for soil-factor lookup.
-#: Sandy/Loamy/Silty/Clayey are first-class; only the legacy unknown sentinel
-#: falls back to Silty (the tool layer handles undetermined soil separately).
-_SOIL_LOOKUP = {
-    "Sandy": "Sandy",
-    "Loamy": "Loamy",
-    "Clayey": "Clayey",
-    "Silty": "Silty",
-    "I'm not sure": "Silty",
-}
 
 
 # --- Sizing factor -----------------------------------------------------------
@@ -98,54 +67,18 @@ def parse_perc_rate(perc_input: str | None) -> float | None:
     return rate
 
 
-def soil_sizing_factor(soil_type: str, distance: str) -> float:
-    """Return the sizing factor for a soil type and distance from the foundation.
+def depth_band(depth_in: int) -> str:
+    """CSV depth-band key for a displayed depth option (4/6/8 inches)."""
+    return _DEPTH_BAND[depth_in]
 
-    ``distance == "More than 30 ft"`` uses the more-than-30 column; any other
-    distance ("10-30 ft", "Less than 10 ft") uses the less-than-30 column.
-    Ported from the notebook's ``getSoilSizingFactor``.
+
+def size_factor(soil_type: str, band: str) -> float:
+    """Sizing factor for a soil type and depth band (see SIZE_FACTORS_BY_DEPTH).
+
+    ``soil_type`` must be one of Sandy/Loamy/Silty/Clayey; the tool layer maps an
+    undetermined soil to Clayey (the most conservative column) before calling.
     """
-    column = "More than 30 ft" if distance == "More than 30 ft" else "Less than 30 ft"
-    return SOIL_SIZING_FACTORS[soil_type][column]
-
-
-def rate_sizing_factor(rate: float) -> float | None:
-    """Return the sizing factor for a measured percolation rate, or ``None``.
-
-    Returns the first table band where ``min <= rate <= max``; ``None`` if the
-    rate falls in no band. Ported from the notebook's ``getRateSizingFactor``.
-    """
-    for min_rate, max_rate, factor in RATE_SIZING_TABLE:
-        if min_rate <= rate <= max_rate:
-            return factor
-    return None
-
-
-def resolve_sizing_factor(
-    soil_type: str, distance: str, perc_rate: float | None
-) -> float:
-    """Choose the sizing factor from a measured rate when available, else soil.
-
-    Mirrors the notebook's selection logic:
-
-    * No usable rate -> soil-type factor (unknown/Loamy/Silty fall back to Silty).
-    * Rate below 0.5 in/hr -> a rain garden isn't recommended; fall back to the
-      Silty soil factor so a number is still produced.
-    * Rate >= 0.5 in/hr -> rate-table factor, falling back to the Silty soil
-      factor when the rate matches no band.
-    """
-    lookup = _SOIL_LOOKUP.get(soil_type, "Silty")
-
-    if perc_rate is None:
-        return soil_sizing_factor(lookup, distance)
-
-    if 0 < perc_rate < 0.5:
-        return soil_sizing_factor("Silty", distance)
-
-    factor = rate_sizing_factor(perc_rate)
-    if factor is None:
-        return soil_sizing_factor("Silty", distance)
-    return factor
+    return SIZE_FACTORS_BY_DEPTH[soil_type][band]
 
 
 # --- Dimensions --------------------------------------------------------------
@@ -168,16 +101,6 @@ def garden_dimensions(area: float) -> dict[str, float]:
     width = length * 2
     side = math.sqrt(area)
     return {"length": length, "width": width, "side": side}
-
-
-def recommended_depth(area: float) -> int:
-    """Ponding depth (inches) whose table minimum-area is closest to ``area``.
-
-    Closest by absolute difference; ties resolve to the first (shallowest)
-    matching row, matching the notebook's pandas ``idxmin`` behavior. Ported
-    from the notebook's ``getDepth``.
-    """
-    return min(GEOMETRY_TABLE, key=lambda depth: abs(GEOMETRY_TABLE[depth] - area))
 
 
 # --- Plants ------------------------------------------------------------------

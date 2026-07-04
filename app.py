@@ -134,52 +134,44 @@ def _resolve_roof(text: str, roof_sqft) -> str:
     return text.replace(_ROOF_TOKEN, str(int(roof_sqft)))
 
 
-# Curated allow-list of summary tokens sourced 1:1 from the size_garden design.
-# catchment_sqft is handled separately (it comes from the tool INPUT, not the
-# design output). Enumerated explicitly — never a **design splat — so an unknown
+# Curated allow-list of per-option summary tokens. The first four are scoped to a
+# single depth option; catchment_sqft and gallons_per_year are depth-invariant and
+# shared across all three. Enumerated explicitly — never a **splat — so an unknown
 # token in the model summary is a detectable error, not a silent pass-through.
-_SUMMARY_DESIGN_KEYS = (
-    "area_sqft", "depth_inches", "elongated_width_ft", "elongated_length_ft",
-    "balanced_side_ft", "interior_plant_count", "perimeter_plant_count",
-    "drainage_time_hours", "gallons_per_year",
-)
+_OPTION_TOKEN_KEYS = ("depth_in", "area_sqft", "interior_plants", "perimeter_plants")
 _TOKEN_RE = re.compile(r"\{(\w+)\}")
 
 
-def _substitutions(sizing_entry: dict) -> dict:
-    """Curated token -> deterministic value map for summary substitution.
+def _substitutions(sizing_entry: dict, option: dict) -> dict:
+    """Per-option token -> deterministic value map for summary substitution.
 
-    Values may be None (e.g. drainage_time_hours without a measured perc rate);
-    :func:`_resolve_summary` treats a *referenced* null as an error and falls back.
-    catchment_sqft is read from the size_garden INPUT (it is not a design output).
+    Partitioned by option: each dict pulls ONLY its own depth's area/plant counts,
+    so a rendered summary can never show a mismatched depth (an 8" paragraph cannot
+    substitute a 4" area). catchment_sqft is read from the size_garden INPUT and
+    gallons_per_year from the output — both depth-invariant, shared across options.
+    A None value (e.g. gallons without precip data) is treated by
+    :func:`_resolve_summary` as a referenced-null error and routes to the fallback.
     """
-    design = sizing_entry["output"]["design"]
-    subs = {k: design.get(k) for k in _SUMMARY_DESIGN_KEYS}
+    subs = {k: option.get(k) for k in _OPTION_TOKEN_KEYS}
     subs["catchment_sqft"] = sizing_entry["input"].get("catchment_sa")
+    subs["gallons_per_year"] = sizing_entry["output"].get("gallons_per_year")
     return subs
 
 
 def _fallback_summary(subs: dict) -> str:
-    """Fully code-authored summary. Tokens filled from ``subs``; any clause whose
-    value is null is omitted. Its only digits are substituted deterministic values
-    (no narrative digits), so it is returned as-is with no digit guard."""
+    """Fully code-authored per-option summary. Tokens filled from ``subs``; any
+    clause whose value is null is omitted. Its only digits are substituted
+    deterministic values (no narrative digits), so it is returned as-is."""
     parts = [
-        f"Your rain garden should cover about {subs['area_sqft']} sq ft and sit "
-        f"{subs['depth_inches']} inches deep. Shape it either elongated "
-        f"({subs['elongated_width_ft']} ft by {subs['elongated_length_ft']} ft, long "
-        f"side across the water's path) or squarer ({subs['balanced_side_ft']} ft per "
-        f"side).",
-        f"Plan for {subs['interior_plant_count']} plants in the wetter center and "
-        f"{subs['perimeter_plant_count']} around the drier edge.",
+        f"At about {subs['depth_in']} inches deep, your rain garden should cover "
+        f"roughly {subs['area_sqft']} sq ft.",
+        f"Plan for {subs['interior_plants']} plants in the wetter center and "
+        f"{subs['perimeter_plants']} around the drier edge.",
     ]
     if subs.get("gallons_per_year") is not None:
         parts.append(
             f"It captures roughly {subs['gallons_per_year']} gallons of runoff a year "
             f"from about {subs['catchment_sqft']} sq ft of catchment."
-        )
-    if subs.get("drainage_time_hours") is not None:
-        parts.append(
-            f"After a storm it drains in about {subs['drainage_time_hours']} hours."
         )
     parts.append("Review the advisories below before you dig.")
     return " ".join(parts)
@@ -213,29 +205,34 @@ def _assemble_results(call_log: list) -> dict:
     Reads call_log (not model text). Dict comprehension keeps the *last* entry per
     tool name, so a refine turn that re-runs size_garden surfaces the updated design.
 
-    The summary is rendered by token substitution (:func:`_resolve_summary`): the
-    model authors it with named {tokens}, and the exact deterministic values are
-    injected here, so no computed number ever originates in model prose. Retrieved
-    guidance is narrative fuel for that prose upstream — it is NOT a results field.
+    Summaries are rendered by token substitution (:func:`_resolve_summary`): the model
+    authors ONE unified paragraph with named {tokens}, and it is substituted three
+    times — once per depth option, against that option's own value set — so the depth
+    tradeoff is conveyed by the numbers, not per-depth editorial prose, and no computed
+    number ever originates in model prose. Retrieved guidance is narrative fuel for that
+    prose upstream — it is NOT a results field.
 
     Guards against a prompt slip (present_results without the sizing call in this
-    request's log): with no design to substitute against, the raw summary passes
-    through rather than raising KeyError.
+    request's log): with no options to substitute against, no summaries are produced.
     """
     latest = {c["name"]: c for c in call_log}
     present = latest.get("present_results")
     raw_summary = present["input"].get("summary") if present else None
 
     results: dict = {}
-    # Numeric/structured fields — sourced ONLY from the deterministic compute-tool
-    # entries. Advisories pass through byte-identical to the size_garden output.
+    # Structured fields — sourced ONLY from the deterministic compute-tool entries.
+    # Advisories pass through byte-identical to the size_garden output.
     sizing = latest.get("size_garden")
     if sizing:
-        results["summary"] = _resolve_summary(raw_summary, _substitutions(sizing))
-        results["sizing"] = sizing["output"]
-        results["advisories"] = sizing["output"].get("advisories", [])
-    else:
-        results["summary"] = raw_summary
+        out = sizing["output"]
+        for option in out["sizing"]["options"]:
+            option["summary"] = _resolve_summary(
+                raw_summary, _substitutions(sizing, option)
+            )
+        results["sizing"] = out["sizing"]              # {options (w/ summaries), advisories}
+        results["advisories"] = out.get("advisories", [])
+        results["gallons_per_year"] = out.get("gallons_per_year")
+        results["recommended"] = out.get("recommended")
     plants = latest.get("filter_plants")
     if plants:
         results["plants"] = plants["output"]
@@ -299,7 +296,10 @@ def chat(req: ChatRequest):
 
     assistant = last_assistant_text(messages)
     if not assistant and results:
-        assistant = results.get("summary")
+        # No top-level summary anymore; fall back to the first depth option's summary.
+        options = results.get("sizing", {}).get("options") if results else None
+        if options:
+            assistant = options[0].get("summary")
     # Deterministic {roof_sqft} injection for the question turn (no-op on other turns).
     assistant = _resolve_roof(assistant, roof_sqft)
 

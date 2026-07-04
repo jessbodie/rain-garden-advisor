@@ -303,12 +303,14 @@ def _run_oracle(location, status, call_log, messages):
         "both plant zones should be non-empty for NY"
     assert len(plants_out["interior"]) <= 15 and len(plants_out["perimeter"]) <= 15
 
-    # Plausibility — sizing: 700 * 0.10 (Clayey @ >30 ft) = 70 sq ft; depth
-    # saturates at 12 in (known getDepth TODO for area > 36).
-    assert sizing["design"]["area_sqft"] == 70, \
-        f"area {sizing['design']['area_sqft']} != 70 — sizing-input wiring error"
-    assert sizing["design"]["depth_inches"] == 12, \
-        f"depth {sizing['design']['depth_inches']} should saturate at 12 in"
+    # Plausibility — sizing: three depth options (about 4/6/8 in), each with a
+    # positive area, and deeper options are more compact (smaller footprint).
+    options = sizing["sizing"]["options"]
+    assert [o["depth_in"] for o in options] == [4, 6, 8], \
+        f"expected depth options 4/6/8, got {[o['depth_in'] for o in options]}"
+    assert all(o["area_sqft"] > 0 for o in options), "every option needs a positive area"
+    assert options[0]["area_sqft"] > options[2]["area_sqft"], \
+        "shallower option should be larger than the deeper one"
 
     # Additive RAG: search_guidance fired exactly once on the terminal turn (the
     # gate lets it through only after size_garden + filter_plants), and returned
