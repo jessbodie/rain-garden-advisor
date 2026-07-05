@@ -34,6 +34,7 @@ from agent import last_assistant_text, run_agent  # noqa: E402
 from rain_garden.retrieval import search  # noqa: E402
 from rain_garden.roofarea import estimate_roof_area  # noqa: E402
 from tools import (  # noqa: E402
+    CONCLUDE_WITHOUT_PLAN,
     LOCATION_PREAMBLE_MARKER,
     ROOF_ESTIMATE_AVAILABLE,
     FatalToolError,
@@ -79,6 +80,12 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     status: str  # awaiting_user | complete | out_of_region | error
+    # Terminal discriminator for the frontend, set ONLY on a complete turn (else None).
+    # Gates which screen renders — the frontend keys off this, never a transcript scan:
+    #   "plan"                 — recommended design; normal plan render.
+    #   "plan_not_recommended" — State A: results present, recommended False, blocker kept.
+    #   "declined"             — State B: user declined; NO results, terminal message only.
+    outcome: str | None = None
     messages: list = []
     assistant_message: str | None = None
     results: dict | None = None  # sizing/plants/advisories + token-injected summary
@@ -255,6 +262,16 @@ def _assemble_results(call_log: list) -> dict:
     return results
 
 
+def _is_declined(call_log: list) -> bool:
+    """True if the model reached the decline terminal (spec §7.5 State B).
+
+    Read from call_log, exactly like the search_guidance gate and the present_results
+    completion — NOT by scanning the transcript. This call-log keying is the whole
+    reason conclude_without_plan is a tool and not an inferred sentinel (§10-D).
+    """
+    return any(c["name"] == CONCLUDE_WITHOUT_PLAN for c in call_log)
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     """Run one agent-loop pass. Sync handler → FastAPI runs it in a threadpool.
@@ -304,11 +321,24 @@ def chat(req: ChatRequest):
             ).model_dump(),
         )
 
-    results = _assemble_results(call_log) if status == "complete" else None
-    if results is not None and _roof_estimate_available(messages):
-        # Independent of size_garden's own advisories: the persistent whole-roof caveat,
-        # shown whenever an estimate was offered — regardless of the user's final value.
-        results.setdefault("advisories", []).append(_ROOF_ADVISORY)
+    # Terminal outcome discriminator (spec §9), keyed off call_log — never a transcript
+    # scan. Only a complete turn carries an outcome; awaiting_user/error leave it None.
+    outcome = None
+    results = None
+    if status == "complete":
+        if _is_declined(call_log):
+            # State B: the user declined an un-overridable blocker. No plan is produced —
+            # results stays None even if some stray sizing entry sits in the log.
+            outcome = "declined"
+        else:
+            results = _assemble_results(call_log)
+            if _roof_estimate_available(messages):
+                # Independent of size_garden's own advisories: the persistent whole-roof
+                # caveat, shown whenever an estimate was offered — regardless of value.
+                results.setdefault("advisories", []).append(_ROOF_ADVISORY)
+            # State A vs normal: the not-recommended layout is gated on `recommended`
+            # (a blocker was overridden), NOT on any advisory's corrective severity.
+            outcome = "plan" if results.get("recommended") else "plan_not_recommended"
 
     assistant = last_assistant_text(messages)
     if not assistant and results:
@@ -321,6 +351,7 @@ def chat(req: ChatRequest):
 
     return ChatResponse(
         status=status,
+        outcome=outcome,
         messages=messages,
         assistant_message=assistant or None,
         results=results,

@@ -5,9 +5,12 @@ This module exposes:
 
 * ``LOWER_48`` and ``geocode_and_gate`` — a pre-step that resolves an address and
   refuses anything outside the contiguous lower-48 states.
-* ``TOOLS`` — four Anthropic-style tool schemas the model can call.
-* ``dispatch`` — routes a tool call to the underlying module and returns a
-  strictly JSON-safe result (no numpy types, no NaN).
+* ``TOOLS`` — the Anthropic-style tool schemas the model can call (the compute
+  tools, ``check_viability``, ``search_guidance``, and the two terminal signals
+  ``present_results`` / ``conclude_without_plan``).
+* ``dispatch`` — routes a compute tool call to the underlying module and returns a
+  strictly JSON-safe result (no numpy types, no NaN). The terminal signals are
+  intercepted by ``agent.py`` and never reach ``dispatch``.
 
 Error tiers: recoverable lookup failures are returned as ``{"is_error": True,
 ...}`` for the model to react to; a missing API key is fatal and raised as
@@ -301,6 +304,57 @@ TOOLS = [
         },
     },
     {
+        "name": "check_viability",
+        "description": (
+            "Check whether the site clears the three viability blockers BEFORE you size "
+            "the garden: foundation setback (garden under 10 ft from the house), slope "
+            "over 12%, and measured drainage below 0.5 in/hr. Also flags clayey soil "
+            "that hasn't been drainage-tested. Call this the moment a viability slot "
+            "(distance, slope steepness, measured drainage rate, or soil) is first "
+            "collected OR corrected — pass every value you know so far; omit the ones you "
+            "don't. It computes nothing about size. If it returns a 'blocking' advisory, "
+            "raise it with the user THIS turn (offer the correction, then confirm whether "
+            "they want to proceed anyway) before moving on — do not call size_garden while "
+            "an un-overridden blocker stands. Re-call it after any correction to confirm "
+            "the blocker cleared."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "distance": {
+                    "type": "string",
+                    "enum": ["More than 30 ft", "10-30 ft", "Less than 10 ft"],
+                    "description": (
+                        "Distance of the planned garden from the house foundation. If the "
+                        "user gives a number, bucket it: under 10 ft -> 'Less than 10 ft'; "
+                        "10 to 30 ft (inclusive) -> '10-30 ft'; over 30 ft -> 'More than "
+                        "30 ft'. Omit if not yet known."
+                    ),
+                },
+                "slope_ok": {
+                    "type": "boolean",
+                    "description": "True if the site slope is flat or under 12%; false if steeper. Omit if unknown.",
+                },
+                "perc_rate": {
+                    "type": "string",
+                    "description": (
+                        "The user's MEASURED drainage/percolation rate (inches/hour), if they "
+                        "have actually measured it. Omit if unmeasured — do not guess."
+                    ),
+                },
+                "soil_type": {
+                    "type": "string",
+                    "enum": ["Sandy", "Silty", "Loamy", "Clayey"],
+                    "description": (
+                        "Classify the user's free-text soil description into one of these four. "
+                        "Omit if it cannot be determined. Do not pass raw text."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "search_guidance",
         "description": (
             "Retrieve short, cited passages of external how/why rain-garden guidance "
@@ -349,11 +403,48 @@ TOOLS = [
             "required": ["summary"],
         },
     },
+    {
+        "name": "conclude_without_plan",
+        "description": (
+            "End the conversation WITHOUT a rain garden plan. Call this only when a "
+            "blocking site condition (too close to the foundation, slope over 12%, or "
+            "measured drainage below 0.5 in/hr) cannot be corrected AND the user, after "
+            "you offered the correction and confirmed, has chosen NOT to proceed. This is "
+            "the decline path: do NOT call size_garden or present_results. In the same "
+            "turn, deliver a brief, kind closing message to the user as normal text. Like "
+            "present_results this is a terminal control signal that runs no calculation; "
+            "the server ends the conversation with no plan."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "One short line naming the unresolved blocker that ended the plan "
+                        "(e.g. 'garden must stay under 10 ft from the foundation'). For the "
+                        "record; your closing message to the user is normal assistant text."
+                    ),
+                },
+            },
+            "required": ["reason"],
+        },
+    },
 ]
 
-# Name of the terminal-signal tool. The agent loop intercepts this before dispatch;
-# it is never routed to a backend module (it appears in TOOLS but not in dispatch).
+# The two terminal-signal tools. The agent loop intercepts BOTH before dispatch; they
+# appear in TOOLS but are never routed to a backend module. present_results ends the
+# conversation WITH a plan; conclude_without_plan ends it on the decline path with no
+# plan (spec §7.5 State B). Both are recorded in call_log so the HTTP layer derives the
+# terminal outcome from the log (call-log-keyed, like search_guidance — never a
+# transcript scan), which is the whole reason conclude_without_plan is a tool (§10-D).
 PRESENT_RESULTS = "present_results"
+CONCLUDE_WITHOUT_PLAN = "conclude_without_plan"
+
+# The pre-sizing viability tool. Dispatched (it computes the blocker set), but unlike
+# the other compute tools it takes no sizing inputs, so the model can call it the moment
+# a viability slot fills. size_garden also calls the same underlying check internally.
+CHECK_VIABILITY = "check_viability"
 
 # The RAG retrieval tool. Unlike present_results it IS dispatched, but only on the
 # terminal turn: the agent loop gates it on these deterministic tools already
@@ -372,10 +463,102 @@ GUIDANCE_GATE_MSG = (
 )
 
 
+# --- Viability checks --------------------------------------------------------
+
+# The three viability blockers plus the soft clayey advisory. Each entry is
+# (code, severity, corrective_action, message). The list order is the stable
+# advisory order (spec §4.1): foundation_setback, slope, low_drainage, then the
+# soft clayey advisory. `code` is carried on the `type` field to stay uniform with
+# the other site advisories (spec §11 — align, don't fork); `corrective_action` is
+# an additive field present only on these viability advisories. clayey_unverified's
+# severity is "corrective" (the existing non-blocking vocabulary), not blocking.
+_VIABILITY_SPECS = {
+    "foundation_setback": (
+        "blocking", "relocate_min_10ft",
+        "Site the rain garden at least 10 ft from the foundation.",
+    ),
+    "slope": (
+        "blocking", "regrade_site",
+        "Slope exceeds 12% — regrade or choose a flatter location.",
+    ),
+    "low_drainage": (
+        "blocking", "amend_soil",
+        "Drainage below 0.5 in/hr — not recommended unless you improve it.",
+    ),
+    "clayey_unverified": (
+        "corrective", "test_and_amend",
+        "Clayey soil: verify drainage is at least 0.5 in/hr; amend until it is.",
+    ),
+}
+
+# The three known distance buckets (spec §4.6). check_viability raises on any other
+# non-None value so a model mislabel fails loudly rather than silently mis-deciding.
+_VALID_DISTANCES = {"Less than 10 ft", "10-30 ft", "More than 30 ft"}
+
+
+def _viability_advisory(code: str) -> dict:
+    """Build one viability advisory object from :data:`_VIABILITY_SPECS`."""
+    severity, corrective_action, message = _VIABILITY_SPECS[code]
+    return {
+        "type": code,
+        "severity": severity,
+        "corrective_action": corrective_action,
+        "message": message,
+    }
+
+
+def check_viability(distance=None, slope_ok=None, perc_rate=None, soil_type=None) -> dict:
+    """Evaluate the three viability blockers (+ soft clayey advisory) from inputs.
+
+    Stateless and None-tolerant (spec §4.2): each dimension is evaluated
+    independently, and a ``None`` input produces no advisory for its dimension —
+    so this can be called incrementally as slots fill, not only at the end. It
+    depends on none of the sizing inputs (catchment, precipitation, factor table).
+
+    * ``distance`` — enum ``"Less than 10 ft"`` | ``"10-30 ft"`` | ``"More than
+      30 ft"`` | ``None``. Blocks only on ``"Less than 10 ft"``; 10 ft belongs to
+      ``"10-30 ft"``. Any other non-None value raises ``ValueError`` (§4.6).
+    * ``slope_ok`` — ``bool | None``. Blocks when explicitly ``False`` (§4.3);
+      ``None`` does not block.
+    * ``perc_rate`` — ``float | None``, the MEASURED percolation rate (in/hr),
+      already numeric (callers parse free text upstream). Blocks only on the open
+      interval ``0 < rate < 0.5``: ``0.5`` and ``0.0`` both pass (§4.3, §10-A).
+    * ``soil_type`` — ``str | None``. Fires the soft ``clayey_unverified``
+      advisory only when soil is Clayey AND no rate was measured; once a rate is
+      measured the rate governs and the advisory is suppressed (§4.4).
+
+    Returns ``{"recommended": bool, "advisories": [ViabilityAdvisory, ...]}``.
+    ``recommended`` is ``not any(severity == "blocking")`` over the advisories
+    produced from the inputs provided — only *final* once all inputs are present
+    (i.e. inside :func:`_size_garden`); mid-flow the caller reads individual
+    advisories, not this flag.
+    """
+    if distance is not None and distance not in _VALID_DISTANCES:
+        raise ValueError(f"Unknown distance value: {distance!r}")
+
+    advisories = []
+    if distance == "Less than 10 ft":
+        advisories.append(_viability_advisory("foundation_setback"))
+    if slope_ok is False:
+        advisories.append(_viability_advisory("slope"))
+    if perc_rate is not None and 0 < perc_rate < 0.5:
+        advisories.append(_viability_advisory("low_drainage"))
+    if soil_type == "Clayey" and perc_rate is None:
+        advisories.append(_viability_advisory("clayey_unverified"))
+
+    recommended = not any(a["severity"] == "blocking" for a in advisories)
+    return {"recommended": recommended, "advisories": advisories}
+
+
 # --- size_garden composition -------------------------------------------------
 
-def _advisories(determined_soil, distance, slope_ok, slopes_away_from_house, perc_input, parsed_rate):
-    """Deterministic site advisories as {type, severity, message} objects."""
+def _advisories(determined_soil, slopes_away_from_house, perc_input, parsed_rate):
+    """Non-viability site advisories as {type, severity, message} objects.
+
+    The viability blockers (foundation_setback, slope, low_drainage) and the soft
+    clayey advisory now live in :func:`check_viability`; this covers only the
+    remaining depth-invariant site notes.
+    """
     out = [{
         "type": "utilities", "severity": "informational",
         "message": "Check for underground utilities before digging.",
@@ -388,26 +571,6 @@ def _advisories(determined_soil, distance, slope_ok, slopes_away_from_house, per
                 "assuming slow, clay-like drainage. Confirming your soil type will likely "
                 "refine — usually shrink — this estimate."
             ),
-        })
-    if determined_soil == "Clayey":
-        out.append({
-            "type": "clay_drainage", "severity": "corrective",
-            "message": "Clayey soil: verify drainage is at least 0.5 in/hr; amend until it is.",
-        })
-    if parsed_rate is not None and 0 < parsed_rate < 0.5:
-        out.append({
-            "type": "low_drainage", "severity": "blocking",
-            "message": "Drainage below 0.5 in/hr — not recommended unless you improve it.",
-        })
-    if distance == "Less than 10 ft":
-        out.append({
-            "type": "foundation_setback", "severity": "blocking",
-            "message": "Site the rain garden at least 10 ft from the foundation.",
-        })
-    if not slope_ok:
-        out.append({
-            "type": "slope", "severity": "blocking",
-            "message": "Slope exceeds 12% — regrade or choose a flatter location.",
         })
     # Direction (distinct from steepness): only when explicitly toward the house.
     # True or omitted (None) -> no advisory; don't nag when direction wasn't assessed.
@@ -493,10 +656,21 @@ def _size_garden(
     if total_precip_yr is not None:
         gallons = sizing.gallons_diverted(catchment_sa, total_precip_yr)
 
-    advisories = _advisories(
-        determined_soil, distance, slope_ok, slopes_away_from_house, perc_rate, parsed_rate
+    # Viability (blocking) checks live in one deterministic place (§6, DRY): the
+    # full input set is passed with the PARSED numeric rate, and the returned
+    # blockers + soft clayey advisory lead the merged list. No blocking advisory is
+    # produced outside check_viability, so recommended is its flag verbatim.
+    viability = check_viability(
+        distance=distance,
+        slope_ok=slope_ok,
+        perc_rate=parsed_rate,
+        soil_type=determined_soil,
     )
-    recommended = not any(a["severity"] == "blocking" for a in advisories)
+    site_advisories = _advisories(
+        determined_soil, slopes_away_from_house, perc_rate, parsed_rate
+    )
+    advisories = viability["advisories"] + site_advisories
+    recommended = viability["recommended"]
 
     # 30%-smaller allowance: a pressure-release valve for users whose recommended
     # garden won't fit. Only meaningful when an option is actually too big (ceiling
@@ -577,6 +751,21 @@ def _run(tool_name: str, tool_input: dict):
         except Exception as exc:  # noqa: BLE001 — additive channel, never fatal
             return {"is_error": True, "message": f"guidance retrieval unavailable: {exc}"}
         return {"passages": passages}
+
+    if tool_name == "check_viability":
+        # Parse the free-text rate to a float here (as size_garden does), so the
+        # function always sees a numeric perc_rate. An invalid distance raises
+        # ValueError inside check_viability; dispatch converts it to a recoverable
+        # error so the model re-labels rather than crashing the loop.
+        try:
+            return check_viability(
+                distance=tool_input.get("distance"),
+                slope_ok=tool_input.get("slope_ok"),
+                perc_rate=sizing.parse_perc_rate(tool_input.get("perc_rate")),
+                soil_type=tool_input.get("soil_type"),
+            )
+        except ValueError as exc:
+            return {"is_error": True, "message": str(exc)}
 
     if tool_name == "size_garden":
         return _size_garden(

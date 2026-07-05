@@ -40,6 +40,7 @@ except (AttributeError, ValueError):  # non-reconfigurable stream
     pass
 
 from tools import (
+    CONCLUDE_WITHOUT_PLAN,
     GUIDANCE_GATE_MSG,
     GUIDANCE_PREREQS,
     PRESENT_RESULTS,
@@ -51,6 +52,11 @@ from tools import (
     dispatch,
     geocode_and_gate,
 )
+
+# The two terminal control signals: both end the turn as "complete" and are recorded
+# in call_log (never dispatched). present_results ends WITH a plan; conclude_without_plan
+# ends on the decline path with no plan. The HTTP layer reads call_log to tell them apart.
+_TERMINAL_SIGNALS = frozenset({PRESENT_RESULTS, CONCLUDE_WITHOUT_PLAN})
 from rain_garden.prompts import SYSTEM_PROMPT
 
 # Sonnet is a sensible default for tool orchestration (cost/latency vs. Opus).
@@ -126,8 +132,10 @@ def run_agent(
     * ``status == "awaiting_user"`` — the model asked a question (``end_turn`` with
       trailing text and no ``present_results``); the caller resumes by appending the
       user's answer and calling again.
-    * ``status == "complete"`` — the model called ``present_results``; the design is
-      final. The summary rides in the ``present_results`` ``call_log`` entry.
+    * ``status == "complete"`` — the model reached a terminal signal: either
+      ``present_results`` (a finished design; the summary rides in that ``call_log``
+      entry) or ``conclude_without_plan`` (the decline path — an un-overridable blocker;
+      no design). The HTTP layer reads ``call_log`` to tell the two terminals apart.
     * ``status == "error"`` — truncation or an unhandled stop reason.
 
     ``call_log`` records every tool call this invocation made
@@ -160,10 +168,12 @@ def run_agent(
             for block in resp.content:  # ALL blocks — parallel calls are common
                 if block.type != "tool_use":
                     continue
-                if block.name == PRESENT_RESULTS:
-                    # Terminal control signal — intercepted, never dispatched. Record
-                    # it in call_log (summary lives here) and acknowledge so the
-                    # transcript stays API-valid (every tool_use needs a tool_result).
+                if block.name in _TERMINAL_SIGNALS:
+                    # Terminal control signal (present_results OR conclude_without_plan)
+                    # — intercepted, never dispatched. Record it in call_log (the summary
+                    # or decline reason lives here) and acknowledge so the transcript stays
+                    # API-valid (every tool_use needs a tool_result). The HTTP layer reads
+                    # which signal fired from call_log to set the terminal outcome.
                     call_log.append(
                         {"name": block.name, "input": block.input, "output": None}
                     )

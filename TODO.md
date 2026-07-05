@@ -70,6 +70,53 @@ Only `{roof_sqft}` is adoptable; the ~1,700 figure never is.
 
 ---
 
+## Implemented: Early Viability Check (`check_viability`) + decline path
+Implemented 2026-07-05 (branch `blocking-advisories`). Deterministic core verified
+against the Chat-authored oracle (spec §8, `tests/test_viability.py`); wiring verified
+offline (full suite green). Moves the three viability blockers earlier in the flow so a
+site is flagged as inputs are collected, not only at the terminal sizing turn.
+
+**What shipped**
+- `tools.check_viability(distance, slope_ok, perc_rate, soil_type)` — stateless,
+  None-tolerant; the single home for `foundation_setback`, `slope`, `low_drainage`
+  (measured rate on the open interval `0 < rate < 0.5`; `0.0`/`0.5` pass) + soft
+  `clayey_unverified`. Invalid `distance` enum raises `ValueError` (tool path → recoverable
+  error). Exposed as the `check_viability` tool; `size_garden` also calls it internally
+  (DRY — one place derives `recommended`). The old inline blocking logic in `_advisories`
+  is deleted.
+- **Behavior change:** the old `clay_drainage` advisory (fired on any Clayey soil) is
+  replaced by `clayey_unverified` (fires only when Clayey AND no measured rate; a measured
+  rate governs and suppresses it). The CLAUDE.md "byte-identical advisories" note was
+  updated accordingly.
+- `conclude_without_plan` terminal tool (decline path, §7.5 State B) — intercepted in
+  `agent.py` like `present_results`, recorded in `call_log`, returns `status="complete"`.
+- `ChatResponse.outcome` discriminator (`app.py`, §9): `"plan"` / `"plan_not_recommended"`
+  (override, State A) / `"declined"` (no `results`), keyed off `call_log` — never a
+  transcript scan (§10-D).
+- Prompt (`prompts.py`): the `check_viability` wiring, the raise-on-knowability rule, and
+  the **explicit two-step** offer-correction → confirm-override → decline flow (§7.2, kept
+  distinct — not collapsed into one "proceed anyway?").
+
+**Reconciliation decisions (spec §11, "align, don't fork" — confirmed with user)**
+- Advisory code rides the existing `type` field (not a new `code` field); `corrective_action`
+  is an additive field on viability advisories only.
+- `clayey_unverified` uses the existing non-blocking severity `"corrective"` (not the spec's
+  proposed new `"advisory"` value). Only `severity == "blocking"` gates not-recommended;
+  verified by grep that nothing keys blocking-UI treatment off corrective (precedent:
+  `slope_toward_house` already ships corrective + `recommended: true`).
+
+**Still open / deferred**
+- **§10-E tracker step mapping** — the prompt raises blockers "when you learn the input"
+  without hard-binding to named tracker steps (Site Conditions = distance+slope, Growing
+  Conditions = soil+drainage). Reconcile against the locked wireframe tracker before/with
+  frontend work.
+- **§10-F** — skipped per spec.
+- **Frontend (Vercel, out of this repo):** must gate the plan/not-recommended/decline
+  screens on `outcome` + `recommended`, never on "severity ≠ informational"; must handle a
+  `complete` turn with no `results` (`outcome: "declined"`) and render the restart/"start
+  over" affordance (§9, §10-C). Copy for the canonical `check_viability` messages is
+  placeholder (§4.5) — finalize during frontend work.
+
 ## Implemented: Depth-Options Sizing Redesign
 Implemented 2026-07-04. Verified offline (full suite green). Supersedes the
 "[v2] Depth selection and depth/footprint coupling" deferral below.
@@ -251,6 +298,7 @@ curated source list. Candidates identified so far:
 - Oregon Rain Garden Guide (cited in notebook)
 Added: 2026-06-25
 
+**Evaluate if/when the 3:1 basin slope about the garden's internal side wall should surface as an advisory**
 
 ---
 

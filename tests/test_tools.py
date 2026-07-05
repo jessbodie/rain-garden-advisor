@@ -36,6 +36,34 @@ def test_size_garden_dispatch_is_json_safe():
     assert _dumpable(result)
 
 
+def test_check_viability_dispatch_is_json_safe():
+    result = dispatch("check_viability", {"distance": "Less than 10 ft", "slope_ok": True})
+    assert _dumpable(result)
+
+
+# --- check_viability dispatch (tool path) -------------------------------------
+
+def test_check_viability_clean_site_recommended_no_advisories():
+    result = dispatch("check_viability", {"distance": "More than 30 ft", "slope_ok": True})
+    assert result == {"recommended": True, "advisories": []}
+
+
+def test_check_viability_dispatch_parses_free_text_rate():
+    # The tool takes perc_rate as free text (like size_garden); dispatch parses it to a
+    # float before the check, so "0.3 in/hr" trips the low-drainage blocker.
+    result = dispatch("check_viability", {"perc_rate": "0.3 in/hr"})
+    assert result["recommended"] is False
+    assert [a["type"] for a in result["advisories"]] == ["low_drainage"]
+
+
+def test_check_viability_invalid_distance_is_recoverable_error():
+    # §4.6 raises inside the function; dispatch converts it to a recoverable error so
+    # the model re-labels rather than crashing the loop.
+    result = dispatch("check_viability", {"distance": "right next to it", "slope_ok": True})
+    assert result["is_error"] is True
+    assert "distance" in result["message"].lower()
+
+
 def test_precipitation_dispatch_is_json_safe(monkeypatch):
     monkeypatch.setattr(tools, "get_precipitation_stats", lambda lat, lon: {
         "threshold_precip_rate": 0.323,
@@ -200,13 +228,20 @@ def test_advisory_happy_path_recommended():
         assert set(a) == {"type", "severity", "message"}
 
 
-def test_clay_advisory_fires_with_and_without_measured_rate():
-    # §6.2: clayey advisory now fires whenever soil is Clayey, rate or not.
-    for extra in ({}, {"perc_rate": "1.5"}):
-        result = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Clayey", **extra})
-        clay = [a for a in result["advisories"] if a["type"] == "clay_drainage"]
-        assert clay and clay[0]["severity"] == "corrective"
-        assert result["recommended"] is True  # corrective is not blocking
+def test_clayey_unverified_fires_only_without_measured_rate():
+    # check_viability §4.4: the soft clayey advisory (renamed clay_drainage ->
+    # clayey_unverified) fires only when soil is Clayey AND no rate was measured;
+    # once a rate is measured the rate governs and the advisory is suppressed.
+    no_rate = dispatch("size_garden", {"catchment_sa": 700, "soil_type": "Clayey"})
+    clay = [a for a in no_rate["advisories"] if a["type"] == "clayey_unverified"]
+    assert clay and clay[0]["severity"] == "corrective"
+    assert clay[0]["corrective_action"] == "test_and_amend"
+    assert no_rate["recommended"] is True  # corrective is not blocking
+
+    measured_ok = dispatch(
+        "size_garden", {"catchment_sa": 700, "soil_type": "Clayey", "perc_rate": "1.5"})
+    assert not any(a["type"] == "clayey_unverified" for a in measured_ok["advisories"])
+    assert measured_ok["recommended"] is True
 
 
 def test_advisory_blocking_conditions():
