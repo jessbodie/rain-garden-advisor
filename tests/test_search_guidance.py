@@ -148,7 +148,7 @@ def _present(summary):
 def test_assemble_populates_fields_and_resolves_per_option_summaries():
     call_log = [
         _sizing_entry(advisories=[
-            {"type": "clay_drainage", "severity": "corrective", "message": "m"}]),
+            {"type": "clayey_unverified", "severity": "corrective", "message": "m"}]),
         {"name": "filter_plants", "input": {}, "output": {
             "interior": [{"common_name": "Blue Flag"}], "perimeter": [],
         }},
@@ -160,7 +160,7 @@ def test_assemble_populates_fields_and_resolves_per_option_summaries():
     opts = res["sizing"]["options"]
     assert opts[0]["summary"] == "A 238 sq ft garden with 111 center plants."
     assert opts[2]["summary"] == "A 112 sq ft garden with 47 center plants."
-    assert res["advisories"][0]["type"] == "clay_drainage"
+    assert res["advisories"][0]["type"] == "clayey_unverified"
     assert res["plants"]["interior"][0]["common_name"] == "Blue Flag"
     assert "summary" not in res            # no top-level summary any more
     assert "guidance" not in res           # guidance is not a results field

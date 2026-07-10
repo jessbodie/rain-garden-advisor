@@ -52,10 +52,30 @@ returns `{recommended, sizing:{options[], advisories[]}, advisories[], gallons_p
   perimeter planting). Deeper = smaller factor = more compact. Unknown soil → Clayey column.
 - `sizing.advisories[]` — depth-*invariant* sizing advisory: only the 30%-reduction
   allowance, and only when a ceiling fired and no floor did.
-- top-level `advisories[]` — existing site/viability advisories, byte-identical (clayey
-  now fires whenever soil is Clayey, rate or not). `gallons_per_year` is depth-invariant.
+- top-level `advisories[]` — the merged site advisories. The three **viability blockers**
+  (`foundation_setback`, `slope`, `low_drainage`) plus the soft `clayey_unverified` note now
+  come from `check_viability` (see below); the depth-invariant site notes (`utilities`,
+  `unknown_soil`, `slope_toward_house`, `rate_unparsed`) come from `_advisories`.
+  `gallons_per_year` is depth-invariant.
 - The old single-`design` shape, the distance/rate factor tables, `recommended_depth`, and
   the `contingent` flag are retired.
+
+**Early viability checks (`check_viability`) — the producer of the three blockers.** ✅
+`check_viability(distance, slope_ok, perc_rate, soil_type)` is the single deterministic
+home for the three input-level blockers — `foundation_setback` (distance `"Less than 10 ft"`),
+`slope` (`slope_ok is False`), `low_drainage` (a *measured* rate on the open interval
+`0 < rate < 0.5`; `0.0` and `0.5` both pass) — plus the soft, non-blocking `clayey_unverified`
+note (Clayey soil AND no measured rate; a measured rate governs and suppresses it). It is
+stateless and None-tolerant so the model can call it incrementally as slots fill (the
+`check_viability` **tool**), well before sizing; `size_garden` also calls it internally with
+the full input set (DRY — one place derives `recommended = not any severity == "blocking"`).
+It takes NO sizing inputs and computes nothing about size. An invalid `distance` enum raises
+`ValueError` (the tool path converts that to a recoverable error). Reconciliation with the
+existing advisory schema (spec §11, "align, don't fork"): the code rides the existing `type`
+field (not `code`), `corrective_action` is an additive field on viability advisories only, and
+`clayey_unverified` uses the existing non-blocking severity `"corrective"` (not a new
+`"advisory"` value). Only `severity == "blocking"` gates not-recommended — a corrective
+advisory (clayey, or `slope_toward_house`) coexists with `recommended: true`.
 
 **LLM layer sits on top of the completed deterministic core.**
 - `agent.py` — the agent loop over the Anthropic Messages API. ✅
@@ -67,10 +87,19 @@ returns `{recommended, sizing:{options[], advisories[]}, advisories[], gallons_p
   transport, not a convenience (`exclude_none` drops citations/cache_control the
   API rejects inbound). `last_assistant_text` therefore reads `b["text"]` on
   dicts, not block attributes.
-- **Completion contract:** `present_results` is a terminal control signal, not a
-  calculation. The loop intercepts it before dispatch, records it in `call_log`
-  (with `output=None`; the summary rides in its input), and returns
-  `status="complete"`. It appears in `TOOLS` but is never routed through `dispatch`.
+- **Completion contract:** there are TWO terminal control signals, both intercepted
+  before dispatch, recorded in `call_log` (`output=None`; the payload rides in the
+  input), returning `status="complete"`, and never routed through `dispatch`:
+  `present_results` (ends WITH a plan; summary in its input) and `conclude_without_plan`
+  (the decline path — ends with NO plan; the unresolved blocker rides as `reason`, spec
+  §7.5 State B). The HTTP layer reads `call_log` to tell the two terminals apart.
+- **Terminal `outcome` discriminator (`app.py`, spec §9).** `ChatResponse.outcome` is set
+  only on a `complete` turn, keyed off `call_log` (never a transcript scan — the whole
+  reason `conclude_without_plan` is a tool, §10-D): `"declined"` when the decline signal
+  fired (`results` is `None` — a completion turn with no plan object); otherwise `"plan"` if
+  `recommended`, else `"plan_not_recommended"` (State A: the user overrode a blocker; the
+  plan returns with `recommended: false` and the blocker kept in `advisories`). The
+  not-recommended layout is gated on `recommended`, NOT on any corrective severity.
 - `app.py` — FastAPI `POST /chat`, **client-stateless**. ✅ The `messages`
   transcript *is* the conversation state: the browser holds it and resends it
   each turn; the server runs one `run_agent` pass per request. No session store.
