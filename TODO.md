@@ -106,16 +106,51 @@ site is flagged as inputs are collected, not only at the terminal sizing turn.
   `slope_toward_house` already ships corrective + `recommended: true`).
 
 **Still open / deferred**
-- **§10-E tracker step mapping** — the prompt raises blockers "when you learn the input"
-  without hard-binding to named tracker steps (Site Conditions = distance+slope, Growing
-  Conditions = soil+drainage). Reconcile against the locked wireframe tracker before/with
-  frontend work.
+- **§10-E tracker step mapping** — RESOLVED 2026-07-09, see "Implemented: Progress Stepper
+  (`ChatResponse.stages`)" below. The mapping was reconciled against the wireframe with the
+  user and differs from this item's earlier guess: **all four `check_viability` inputs
+  (distance, slope, drainage, soil) are Site Conditions**; Growing Conditions is sun +
+  moisture (`filter_plants` inputs only). Soil/drainage are NOT Growing Conditions.
 - **§10-F** — skipped per spec.
 - **Frontend (Vercel, out of this repo):** must gate the plan/not-recommended/decline
   screens on `outcome` + `recommended`, never on "severity ≠ informational"; must handle a
   `complete` turn with no `results` (`outcome: "declined"`) and render the restart/"start
   over" affordance (§9, §10-C). Copy for the canonical `check_viability` messages is
   placeholder (§4.5) — finalize during frontend work.
+
+## Implemented: Progress Stepper (`ChatResponse.stages`)
+Implemented 2026-07-09 (branch `blocking-advisories`). Backend-authoritative UI progress
+tracker. Verified offline (`tests/test_progress.py`, 14 cases; full suite green) and
+end-to-end through the HTTP layer with a stubbed client. Resolves §10-E.
+
+**What shipped**
+- `ChatResponse.stages` — five ordered stages (`address`, `localized_data`,
+  `site_conditions`, `growing_conditions`, `plan`), each `{id, label, state}` with
+  `state ∈ not_started|in_progress|complete`, returned on every `/chat` path. The frontend
+  renders it; no stage logic in JS (CLAUDE.md).
+- `_stages` / `_called_tools` / `_latest_viability_inputs` / `_site_conditions_done` in
+  `app.py`. Derived from a structured `tool_use`-name scan of the transcript (cumulative,
+  since the transcript *is* the client-stateless state), NOT `call_log` (per-turn). Two
+  layers: order-free per-stage `complete` flags + a single in-progress cursor placed by
+  status/outcome.
+- **Refined Site-Conditions granularity:** Site clears mid-chat (before `size_garden`) once
+  the latest `check_viability` inputs carry distance+slope+soil AND `check_viability` finds
+  no blocker — reuses the real tool (DRY). A corrective note (clayey-unverified) does not
+  block completion; a blocker (slope, setback, measured low-drainage) does.
+- **End states (tri-state):** an advisory fills the bar to Plan; a produced plan
+  (recommended or overridden → `plan`/`plan_not_recommended`) fills the whole bar; a
+  decline (`conclude_without_plan` → `outcome: declined`) freezes the cursor at Site
+  Conditions and Plan never completes. Stages are NOT strictly left-to-right (a later stage
+  can be complete while an earlier one is the cursor).
+
+**Still open / deferred**
+- **Prompt-nudge contingency (not yet needed):** Refined relies on the model calling
+  `check_viability` incrementally as site slots fill (its tool description already says to).
+  If a live run shows it batching the call to the finale, add one reinforcing sentence to
+  `SYSTEM_PROMPT` — behavioral only, no schema change. Confirm on the next live run.
+- **Frontend rendering** of the stepper lands with the (out-of-repo) Vercel UI, alongside
+  the results screen and its depth toggle. The depth toggle is downstream of the terminal
+  turn and stays decoupled from `stages`.
 
 ## Implemented: Depth-Options Sizing Redesign
 Implemented 2026-07-04. Verified offline (full suite green). Supersedes the
@@ -210,15 +245,21 @@ geometry table were removed; depth is now a user tradeoff across three fixed opt
 (about 4"/6"/8"). See "Implemented: Depth-Options Sizing Redesign" above.
 Added: 2026-06-29
 
-**Agent-layer and FastAPI tests missing**
-The agent/HTTP layers are built but untested: `app.py` (FastAPI `POST /chat`)
-has no `test_app.py`, and `agent.py` has no `test_agent.py` — only the built-in
-Brooklyn oracle smoke test in `__main__`, which hits live Open-Meteo / Nominatim
-/ RapidAPI / Anthropic services. Per CLAUDE.md, tests must not hit the network:
-add fixture-backed tests for `run_agent` (the tool loop, the present_results
-completion contract, awaiting_user/complete/error statuses) and for the `/chat`
-endpoint (seed vs. continue via the location preamble, out-of-region, error tiers).
+**Agent-layer and FastAPI tests — partial gaps remain**
+Largely addressed. `tests/test_viability_wiring.py` and `tests/test_roof_estimate.py`
+are both fully offline (fake Anthropic client + `TestClient` + monkeypatched
+`geocode_and_gate`) and now cover: the `run_agent` tool loop and dispatch, both
+terminal contracts (`present_results` via the `outcome` tiers and
+`conclude_without_plan` — terminal, logged, not routed to dispatch), and the `/chat`
+seed path end-to-end plus the three `outcome` tiers (plan / plan_not_recommended /
+declined).
+Still uncovered: the `status="error"` tier in `run_agent`; the out-of-region gate
+rejection in `/chat`; and a continue-turn `/chat` test (every current `/chat` test
+mocks `geocode_and_gate` to `ok: True`, so only the seed path is exercised). The
+built-in Brooklyn oracle smoke test in `__main__` still hits live services and is
+not part of the offline suite.
 Added: 2026-06-30
+Updated: 2026-07-08
 
 ## [DONE 2026-07-04] Depth selection and depth/footprint coupling
 
@@ -299,6 +340,12 @@ curated source list. Candidates identified so far:
 Added: 2026-06-25
 
 **Evaluate if/when the 3:1 basin slope about the garden's internal side wall should surface as an advisory**
+
+---
+
+## Feature Requests
+
+**Print full plan to PDF**
 
 ---
 
