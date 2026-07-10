@@ -132,11 +132,25 @@ def test_site_incomplete_when_slope_blocker_stands():
 
 
 def test_site_incomplete_when_core_slot_missing():
+    # Only distance known — slope not yet answered — so the site can't clear yet.
+    msgs = _localized(_assistant((
+        "check_viability", {"distance": "More than 30 ft"},
+    )))
+    st = _states(_stages(msgs, "awaiting_user", None))
+    assert st["site_conditions"] == "in_progress"
+
+
+def test_site_completes_on_distance_and_slope_without_soil():
+    # Chosen semantics (live-verified 2026-07-09): the model reliably screens the two
+    # blocker slots (distance, slope) via check_viability but NOT benign soil, so Site
+    # Conditions clears on those two alone — soil is not required. This is what makes the
+    # cursor actually walk Site -> Growing mid-chat.
     msgs = _localized(_assistant((
         "check_viability", {"distance": "More than 30 ft", "slope_ok": True},  # no soil
     )))
     st = _states(_stages(msgs, "awaiting_user", None))
-    assert st["site_conditions"] == "in_progress"
+    assert st["site_conditions"] == "complete"
+    assert st["growing_conditions"] == "in_progress"
 
 
 def test_clayey_untested_is_advisory_not_blocker_site_completes():

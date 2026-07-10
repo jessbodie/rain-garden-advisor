@@ -295,8 +295,13 @@ _STAGES = (
     ("plan", "Rain Garden Plan"),
 )
 # Site Conditions clears early (before size_garden fires) once these viability slots are
-# known AND check_viability finds no standing blocker. perc_rate is not required.
-_SITE_CORE_SLOTS = ("distance", "slope_ok", "soil_type")
+# known AND check_viability finds no standing blocker. Deliberately distance + slope only:
+# those are the two blocker slots the model RELIABLY screens via check_viability (verified
+# by live run). Soil is NOT required — it is not a blocker (only the soft clayey note), and
+# the model won't re-call check_viability for benign soil, so requiring it would stall the
+# stepper until the finale. Soil (and perc_rate) are still PASSED to check_viability below
+# when known, so a measured low-drainage blocker still keeps the stage incomplete.
+_SITE_CORE_SLOTS = ("distance", "slope_ok")
 
 
 def _called_tools(messages: list) -> set[str]:
@@ -348,11 +353,13 @@ def _latest_viability_inputs(messages: list) -> dict:
 def _site_conditions_done(messages: list, tools_called: set[str]) -> bool:
     """True once the site is established: size_garden ran, OR viability cleared early.
 
-    Early-clear needs the core slots (distance, slope, soil) known AND no standing
-    blocker. The "no blocker" test reuses the real check_viability (DRY — one home for
-    blocker logic): a blocker in the inputs (e.g. slope_ok False, or a measured rate
-    under 0.5) keeps `recommended` False and the stage incomplete, while a corrective
-    note (clayey-unverified) does not — completion keys on `recommended`, never severity.
+    Early-clear needs the core slots (distance, slope) known AND no standing blocker.
+    The "no blocker" test reuses the real check_viability (DRY — one home for blocker
+    logic): a blocker in the inputs (e.g. slope_ok False, or a measured rate under 0.5)
+    keeps `recommended` False and the stage incomplete, while a corrective note
+    (clayey-unverified) does not — completion keys on `recommended`, never severity. Soil
+    is not a core slot (see _SITE_CORE_SLOTS) but is still passed through when known, so a
+    clayey + measured-slow-rate combination is caught here just as size_garden would.
     """
     if SIZE_GARDEN in tools_called:
         return True

@@ -134,20 +134,29 @@ end-to-end through the HTTP layer with a stubbed client. Resolves §10-E.
   layers: order-free per-stage `complete` flags + a single in-progress cursor placed by
   status/outcome.
 - **Refined Site-Conditions granularity:** Site clears mid-chat (before `size_garden`) once
-  the latest `check_viability` inputs carry distance+slope+soil AND `check_viability` finds
+  the latest `check_viability` inputs carry **distance + slope** AND `check_viability` finds
   no blocker — reuses the real tool (DRY). A corrective note (clayey-unverified) does not
-  block completion; a blocker (slope, setback, measured low-drainage) does.
+  block completion; a blocker (slope, setback, measured low-drainage) does. Soil is NOT a
+  completion gate (see live-run finding below) but is still passed through when known.
 - **End states (tri-state):** an advisory fills the bar to Plan; a produced plan
   (recommended or overridden → `plan`/`plan_not_recommended`) fills the whole bar; a
   decline (`conclude_without_plan` → `outcome: declined`) freezes the cursor at Site
   Conditions and Plan never completes. Stages are NOT strictly left-to-right (a later stage
   can be complete while an earlier one is the cursor).
 
-**Still open / deferred**
-- **Prompt-nudge contingency (not yet needed):** Refined relies on the model calling
-  `check_viability` incrementally as site slots fill (its tool description already says to).
-  If a live run shows it batching the call to the finale, add one reinforcing sentence to
-  `SYSTEM_PROMPT` — behavioral only, no schema change. Confirm on the next live run.
+**Live-run tuning (2026-07-09, done)**
+Drove a real Brooklyn conversation against uvicorn and watched `stages` per turn. Two
+findings, both resolved:
+- The model calls `check_viability` incrementally for the **blocker** slots (distance,
+  slope) but will NOT re-call it for benign soil (e.g. sandy) — so a distance+slope+soil
+  gate never cleared mid-chat and the cursor stalled at Site until the finale (Coarse, not
+  Refined). Strengthening the prompt to re-call on every slot got slope included but not
+  soil. **Resolution:** the Site gate is distance + slope only (`_SITE_CORE_SLOTS`); soil
+  stays a passed-through input and a categorical Site Condition, just not a completion gate.
+  Verified: the cursor now walks Address → Localized → Site → Growing → Plan as slots fill.
+- Applied the prompt nudge anyway (`prompts.py`, CHECKING VIABILITY EARLY): re-call
+  `check_viability` on each viability slot, passing all known values, even absent a
+  suspected blocker. Behavioral only, no schema change.
 - **Frontend rendering** of the stepper lands with the (out-of-repo) Vercel UI, alongside
   the results screen and its depth toggle. The depth toggle is downstream of the terminal
   turn and stays decoupled from `stages`.
