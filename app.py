@@ -31,14 +31,19 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from agent import last_assistant_text, run_agent  # noqa: E402
+from rain_garden import sizing  # noqa: E402  — parse_perc_rate for stage viability check
 from rain_garden.retrieval import search  # noqa: E402
 from rain_garden.roofarea import estimate_roof_area  # noqa: E402
 from tools import (  # noqa: E402
+    CHECK_VIABILITY,
     CONCLUDE_WITHOUT_PLAN,
     LOCATION_PREAMBLE_MARKER,
+    PRESENT_RESULTS,
     ROOF_ESTIMATE_AVAILABLE,
+    SIZE_GARDEN,
     FatalToolError,
     build_seed,
+    check_viability,
     geocode_and_gate,
 )
 
@@ -92,6 +97,11 @@ class ChatResponse(BaseModel):
     detail: str | None = None
     # Echoed back so the client can resend it next turn (see ChatRequest.roof_sqft).
     roof_sqft: float | None = None
+    # Progress-stepper state for the UI: five stages in canonical order, each
+    # {id, label, state} with state in not_started|in_progress|complete. Derived
+    # server-side from the transcript's tool calls + this turn's status/outcome (see
+    # _stages) — the frontend just renders it. None only when no derivation ran.
+    stages: list | None = None
 
 
 def _has_preamble(messages: list | None) -> bool:
@@ -272,6 +282,141 @@ def _is_declined(call_log: list) -> bool:
     return any(c["name"] == CONCLUDE_WITHOUT_PLAN for c in call_log)
 
 
+# --- Progress stepper (spec: UI stages) --------------------------------------
+# The five UI stages in canonical display order. Each stage's `complete` is derived
+# independently from the transcript's tool calls (order-free — a later stage can read
+# complete while an earlier one is still the in-progress cursor); a single cursor is then
+# placed per this turn's status/outcome. See the plan doc + CLAUDE.md.
+_STAGES = (
+    ("address", "Address"),
+    ("localized_data", "Localized Data"),
+    ("site_conditions", "Site Conditions"),
+    ("growing_conditions", "Growing Conditions"),
+    ("plan", "Rain Garden Plan"),
+)
+# Site Conditions clears early (before size_garden fires) once these viability slots are
+# known AND check_viability finds no standing blocker. Deliberately distance + slope only:
+# those are the two blocker slots the model RELIABLY screens via check_viability (verified
+# by live run). Soil is NOT required — it is not a blocker (only the soft clayey note), and
+# the model won't re-call check_viability for benign soil, so requiring it would stall the
+# stepper until the finale. Soil (and perc_rate) are still PASSED to check_viability below
+# when known, so a measured low-drainage blocker still keeps the stage incomplete.
+_SITE_CORE_SLOTS = ("distance", "slope_ok")
+
+
+def _called_tools(messages: list) -> set[str]:
+    """Cumulative set of tool_use block *names* across every assistant turn.
+
+    A structured read (block type/name), same spirit as _has_preamble — not a prose
+    scan. The transcript is the client-stateless conversation state and run_agent appends
+    this turn's assistant blocks before returning, so this set is cumulative *and*
+    current: it captures tools fired on earlier turns that this turn's call_log omits.
+    """
+    names: set[str] = set()
+    for msg in messages or []:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                if block.get("name"):
+                    names.add(block["name"])
+    return names
+
+
+def _latest_viability_inputs(messages: list) -> dict:
+    """The ``input`` dict of the most recent check_viability tool_use block ({} if none).
+
+    check_viability is None-tolerant and called incrementally as site slots fill, so its
+    latest call reflects the freshest known viability inputs — the signal that advances
+    Site Conditions mid-chat, before size_garden runs at the finale.
+    """
+    latest: dict = {}
+    for msg in messages or []:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") == CHECK_VIABILITY
+            ):
+                latest = block.get("input") or {}
+    return latest
+
+
+def _site_conditions_done(messages: list, tools_called: set[str]) -> bool:
+    """True once the site is established: size_garden ran, OR viability cleared early.
+
+    Early-clear needs the core slots (distance, slope) known AND no standing blocker.
+    The "no blocker" test reuses the real check_viability (DRY — one home for blocker
+    logic): a blocker in the inputs (e.g. slope_ok False, or a measured rate under 0.5)
+    keeps `recommended` False and the stage incomplete, while a corrective note
+    (clayey-unverified) does not — completion keys on `recommended`, never severity. Soil
+    is not a core slot (see _SITE_CORE_SLOTS) but is still passed through when known, so a
+    clayey + measured-slow-rate combination is caught here just as size_garden would.
+    """
+    if SIZE_GARDEN in tools_called:
+        return True
+    vinputs = _latest_viability_inputs(messages)
+    if not all(vinputs.get(slot) is not None for slot in _SITE_CORE_SLOTS):
+        return False
+    return check_viability(
+        distance=vinputs.get("distance"),
+        slope_ok=vinputs.get("slope_ok"),
+        # Parse the same way size_garden does — check_viability expects a numeric rate.
+        perc_rate=sizing.parse_perc_rate(vinputs.get("perc_rate")),
+        soil_type=vinputs.get("soil_type"),
+    )["recommended"]
+
+
+def _stages(messages: list, status: str, outcome: str | None) -> list[dict]:
+    """Derive the five-stage progress stepper for the UI.
+
+    Independent, order-free `complete` flags (from cumulative tool calls) + a single
+    in-progress cursor placed by this turn's status/outcome:
+    * out_of_region — address in_progress, rest not_started (no transcript yet).
+    * complete + plan/plan_not_recommended — every stage complete (a plan was produced,
+      even when a blocker was overridden or an advisory fired; the bar fills fully).
+    * otherwise (awaiting_user / error / declined) — completed stages marked, the cursor
+      on the earliest incomplete stage, the rest not_started. On a decline the site
+      blocker keeps Site Conditions incomplete, so the cursor freezes there and Plan
+      never completes; the frontend styles the halt from outcome == "declined".
+    """
+    tools_called = _called_tools(messages)
+    complete = {
+        "address": _has_preamble(messages),
+        "localized_data": {"get_precipitation_stats", "get_hardiness_zone"} <= tools_called,
+        "site_conditions": _site_conditions_done(messages, tools_called),
+        "growing_conditions": "filter_plants" in tools_called,
+        "plan": PRESENT_RESULTS in tools_called,
+    }
+
+    states: dict[str, str] = {}
+    if status == "out_of_region":
+        states = {sid: "not_started" for sid, _ in _STAGES}
+        states["address"] = "in_progress"
+    elif status == "complete" and outcome in ("plan", "plan_not_recommended"):
+        states = {sid: "complete" for sid, _ in _STAGES}
+    else:
+        cursor_placed = False
+        for sid, _ in _STAGES:
+            if complete[sid]:
+                states[sid] = "complete"
+            elif not cursor_placed:
+                states[sid] = "in_progress"
+                cursor_placed = True
+            else:
+                states[sid] = "not_started"
+
+    return [{"id": sid, "label": label, "state": states[sid]} for sid, label in _STAGES]
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     """Run one agent-loop pass. Sync handler → FastAPI runs it in a threadpool.
@@ -294,7 +439,13 @@ def chat(req: ChatRequest):
         # business outcome (HTTP 200), not an error, and never reaches the model.
         location = geocode_and_gate(req.address or "")
         if not location.get("ok"):
-            return ChatResponse(status="out_of_region", detail=location["message"])
+            # Address submitted but didn't resolve to the lower-48: bar shows Address
+            # in_progress (no transcript exists yet to derive from).
+            return ChatResponse(
+                status="out_of_region",
+                detail=location["message"],
+                stages=_stages([], "out_of_region", None),
+            )
         # Resolve the roof estimate once, up front (reusing the geocoded lat/lon), so it
         # is available before the catchment question. Bounded by a ~5s timeout; None on
         # any failure. Only *availability* rides in the seed; the digit stays out of band.
@@ -307,7 +458,11 @@ def chat(req: ChatRequest):
     except FatalToolError as exc:  # specific catch (§7) — e.g. missing API key
         return JSONResponse(
             status_code=500,
-            content=ChatResponse(status="error", detail=str(exc)).model_dump(),
+            content=ChatResponse(
+                status="error",
+                detail=str(exc),
+                stages=_stages(messages, "error", None),
+            ).model_dump(),
         )
 
     if status == "error":
@@ -318,6 +473,7 @@ def chat(req: ChatRequest):
                 status="error",
                 messages=messages,
                 detail="The model run did not complete (truncated or unhandled stop).",
+                stages=_stages(messages, "error", None),
             ).model_dump(),
         )
 
@@ -356,6 +512,7 @@ def chat(req: ChatRequest):
         assistant_message=assistant or None,
         results=results,
         roof_sqft=roof_sqft,
+        stages=_stages(messages, status, outcome),
     )
 
 

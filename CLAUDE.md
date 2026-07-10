@@ -100,6 +100,30 @@ advisory (clayey, or `slope_toward_house`) coexists with `recommended: true`.
   `recommended`, else `"plan_not_recommended"` (State A: the user overrode a blocker; the
   plan returns with `recommended: false` and the blocker kept in `advisories`). The
   not-recommended layout is gated on `recommended`, NOT on any corrective severity.
+- **Progress stepper (`ChatResponse.stages`, `app.py`).** ✅ Five ordered UI stages —
+  `address`, `localized_data`, `site_conditions`, `growing_conditions`, `plan` — each
+  `{id, label, state}` with `state ∈ not_started|in_progress|complete`, returned on
+  **every** `/chat` path (`_stages`). Derived from the transcript's tool calls
+  (`_called_tools` — a structured `tool_use`-name scan, not prose; cumulative because the
+  transcript *is* the state), NOT from `call_log` (which is per-turn). Two layers:
+  order-free per-stage `complete` flags + a single in-progress cursor placed by
+  status/outcome. Stage→signal: address = geocode preamble present; localized_data =
+  `get_precipitation_stats` + `get_hardiness_zone` (the seed-resolved roof estimate is
+  reference-only, not gating); site_conditions = `size_garden` fired OR viability cleared
+  early (latest `check_viability` inputs have distance+slope AND
+  `check_viability(**inputs).recommended` — reuses the real tool, DRY; a **blocker** keeps
+  it incomplete, a **corrective** note like clayey-unverified does not); growing_conditions
+  = `filter_plants`; plan = `present_results`. A produced plan (recommended OR overridden)
+  fills the whole bar; a **decline** (`conclude_without_plan` → `outcome: declined`) freezes
+  the cursor at the incomplete site stage and Plan never completes. The site gate is
+  **distance + slope only** (not soil): a live run showed the model reliably re-calls
+  `check_viability` for the two blocker slots but skips it for benign soil, so requiring
+  soil stalls the cursor until the finale. Soil is still *passed* to `check_viability` when
+  known (so a measured low-drainage blocker still counts) and still categorized under Site
+  Conditions for the user — it just isn't a completion gate. Growing Conditions' slots
+  (sun/moisture) reach only `filter_plants`, so that stage has no incremental signal
+  (binary). This resolves the §10-E tracker mapping (see TODO.md). Stages are decoupled from the frontend's
+  results-screen depth toggle, which is downstream of the terminal turn.
 - `app.py` — FastAPI `POST /chat`, **client-stateless**. ✅ The `messages`
   transcript *is* the conversation state: the browser holds it and resends it
   each turn; the server runs one `run_agent` pass per request. No session store.
