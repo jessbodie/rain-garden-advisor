@@ -16,6 +16,7 @@ multi-tenant, sensitive, or cost/privilege-amplifying data.
 
 from __future__ import annotations
 
+import os
 import re
 
 from dotenv import find_dotenv, load_dotenv
@@ -50,15 +51,24 @@ from tools import (  # noqa: E402
 app = FastAPI(title="Rain Garden Advisor")
 
 # The browser frontend (jessbodie.com, served from Vercel) calls this API cross-origin.
-# Scoped tight: the production origin only (no "*" — that breaks credentialed requests and
-# isn't the pattern here), only the methods/headers /chat and /warmup actually use. The
-# OPTIONS preflight is answered by the middleware itself, so allow_methods lists only POST.
+# Scoped tight: explicit origins only (no "*" — that breaks credentialed requests and isn't
+# the pattern here), only the methods/headers /chat and /warmup actually use. The OPTIONS
+# preflight is answered by the middleware itself, so allow_methods lists only POST.
 # allow_credentials is left at its default (False): no cookies/auth are in play, which is
-# what keeps the explicit-origin allowlist valid. Vercel preview subdomains are excluded
-# (production-only for now).
+# what keeps the explicit-origin allowlist valid.
+#
+# Origins are env-driven (ALLOWED_ORIGINS, comma-separated) so local dev (localhost:3000)
+# and Vercel preview subdomains can be allowed per-environment WITHOUT a code change, while
+# production stays scoped to jessbodie.com by default. Set e.g.
+#   ALLOWED_ORIGINS=http://localhost:3000,https://jessbodie.com
+# in the relevant environment; unset falls back to production-only.
+_DEFAULT_ORIGINS = "https://jessbodie.com"
+_allowed_origins = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://jessbodie.com"],
+    allow_origins=_allowed_origins,
     allow_methods=["POST"],
     allow_headers=["Content-Type"],
 )
@@ -84,7 +94,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    status: str  # awaiting_user | complete | out_of_region | error
+    status: str  # awaiting_user | complete | address_not_found | out_of_region | error
     # Terminal discriminator for the frontend, set ONLY on a complete turn (else None).
     # Gates which screen renders — the frontend keys off this, never a transcript scan:
     #   "plan"                 — recommended design; normal plan render.
@@ -380,7 +390,9 @@ def _stages(messages: list, status: str, outcome: str | None) -> list[dict]:
 
     Independent, order-free `complete` flags (from cumulative tool calls) + a single
     in-progress cursor placed by this turn's status/outcome:
-    * out_of_region — address in_progress, rest not_started (no transcript yet).
+    * address_not_found / out_of_region — address in_progress, rest not_started (the
+      seed was rejected pre-model, so no transcript exists yet). Both address-entry
+      rejections share this stepper shape; only the terminal `status` differs.
     * complete + plan/plan_not_recommended — every stage complete (a plan was produced,
       even when a blocker was overridden or an advisory fired; the bar fills fully).
     * otherwise (awaiting_user / error / declined) — completed stages marked, the cursor
@@ -398,7 +410,7 @@ def _stages(messages: list, status: str, outcome: str | None) -> list[dict]:
     }
 
     states: dict[str, str] = {}
-    if status == "out_of_region":
+    if status in ("address_not_found", "out_of_region"):
         states = {sid: "not_started" for sid, _ in _STAGES}
         states["address"] = "in_progress"
     elif status == "complete" and outcome in ("plan", "plan_not_recommended"):
@@ -435,16 +447,20 @@ def chat(req: ChatRequest):
         messages.append({"role": "user", "content": req.user_message or ""})
         roof_sqft = req.roof_sqft
     else:
-        # Seed: geocode + gate before any model call. Out-of-region is a terminal
-        # business outcome (HTTP 200), not an error, and never reaches the model.
+        # Seed: geocode + gate before any model call. A rejected address is a terminal
+        # business outcome (HTTP 200), not an error, and never reaches the model. The two
+        # rejection kinds carry distinct statuses (address_not_found — geocode miss;
+        # out_of_region — resolved but outside the lower-48) so the frontend picks the
+        # right error screen by a stable key, not by matching the human `detail` text.
         location = geocode_and_gate(req.address or "")
         if not location.get("ok"):
-            # Address submitted but didn't resolve to the lower-48: bar shows Address
-            # in_progress (no transcript exists yet to derive from).
+            # Address submitted but didn't resolve to a usable lower-48 location: bar shows
+            # Address in_progress (no transcript exists yet to derive from).
+            status = location.get("reason", "out_of_region")
             return ChatResponse(
-                status="out_of_region",
+                status=status,
                 detail=location["message"],
-                stages=_stages([], "out_of_region", None),
+                stages=_stages([], status, None),
             )
         # Resolve the roof estimate once, up front (reusing the geocoded lat/lon), so it
         # is available before the catchment question. Bounded by a ~5s timeout; None on

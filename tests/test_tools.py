@@ -177,6 +177,7 @@ def test_gate_refuses_non_lower_48(monkeypatch):
     })
     result = geocode_and_gate("Juneau, AK")
     assert result["ok"] is False
+    assert result["reason"] == "out_of_region"
     assert "lower-48" in result["message"]
 
 
@@ -186,6 +187,9 @@ def test_gate_refuses_unfindable_address(monkeypatch):
     monkeypatch.setattr(tools, "geocode_address", boom)
     result = geocode_and_gate("asdfghjkl12345")
     assert result["ok"] is False
+    # Distinct reason from the out-of-region refusal, so the HTTP layer can map each
+    # to its own terminal status without string-matching the human message.
+    assert result["reason"] == "address_not_found"
 
 
 # --- size_garden depth options ------------------------------------------------

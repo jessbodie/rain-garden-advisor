@@ -88,18 +88,22 @@ def geocode_and_gate(address: str) -> dict:
     """Geocode an address and gate it to the lower-48 states.
 
     Returns ``{"ok": True, ...geocode fields...}`` for an in-area address, else
-    a structured refusal ``{"ok": False, "message": ...}``. Never raises for a
-    bad address — a not-found result is a refusal, not an exception.
+    a structured refusal ``{"ok": False, "reason": ..., "message": ...}``. Never
+    raises for a bad address — a not-found result is a refusal, not an exception.
+    ``reason`` distinguishes the two refusal kinds so the HTTP layer can map each to
+    a distinct terminal status (``address_not_found`` vs ``out_of_region``) rather
+    than string-matching the human message.
     """
     try:
         result = geocode_address(address)
     except AddressNotFoundError:
         return {
             "ok": False,
+            "reason": "address_not_found",
             "message": "I couldn't find that address — please give a fuller US street address.",
         }
     if result.get("state") not in LOWER_48:
-        return {"ok": False, "message": _OUT_OF_AREA}
+        return {"ok": False, "reason": "out_of_region", "message": _OUT_OF_AREA}
     return {"ok": True, **result}
 
 

@@ -70,6 +70,19 @@ def test_out_of_region_marks_address_in_progress():
     }
 
 
+def test_address_not_found_marks_address_in_progress():
+    # The geocode-miss rejection shares the out_of_region stepper shape (address is the
+    # cursor, nothing else started); only the terminal status differs.
+    st = _states(_stages([], "address_not_found", None))
+    assert st == {
+        "address": "in_progress",
+        "localized_data": "not_started",
+        "site_conditions": "not_started",
+        "growing_conditions": "not_started",
+        "plan": "not_started",
+    }
+
+
 # --- Localized Data -----------------------------------------------------------
 
 def test_localized_data_completes_on_precip_and_hardiness():
