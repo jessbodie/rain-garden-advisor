@@ -17,7 +17,7 @@ only ever reads these fields of the response:
 
 | Field | Type | Drives |
 |---|---|---|
-| `status` | `awaiting_user` \| `complete` \| `out_of_region` \| `error` | Whether to show the input box, the results screen, or an error/redirect |
+| `status` | `awaiting_user` \| `complete` \| `address_not_found` \| `out_of_region` \| `error` | Whether to show the input box, the results screen, or an error/redirect. `address_not_found` = geocode miss; `out_of_region` = resolved but outside lower-48 (two distinct Address error screens) |
 | `outcome` | `null` \| `"plan"` \| `"plan_not_recommended"` \| `"declined"` | **Which terminal screen** renders (set only when `status: complete`) |
 | `assistant_message` | string \| null | The latest advisor chat bubble text |
 | `results` | object \| null | The **plan/results screen** (sizing options, advisories, plants) |
@@ -330,8 +330,13 @@ never completes. The frontend styles this "halt" from `outcome === "declined"`.
 
 ### 2e. Out of region — `out_of_region` (bonus edge state)
 
-Address didn't resolve to the lower-48. No transcript exists yet; only the address
-stage is lit. Show `detail` and let the user re-enter an address.
+Address resolved but is outside the lower-48. No transcript exists yet; only the
+address stage is lit. Show `detail` and let the user re-enter an address.
+
+> **Sibling state — `address_not_found`:** identical payload shape (same stepper,
+> `results`/`messages` empty) but `status: "address_not_found"` and a different
+> `detail` (*"I couldn't find that address…"*), fired when geocoding finds no match.
+> These are the design's two distinct Address-error screens — key off `status`.
 
 ```json
 {

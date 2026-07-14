@@ -133,9 +133,12 @@ advisory (clayey, or `slope_toward_house`) coexists with `recommended: true`.
 
 **Deployment: Render + CORS + `/warmup`.** ✅ The API is deployed on Render at
 `https://rain-garden-advisor-api.onrender.com`; the browser frontend (`jessbodie.com`,
-served from Vercel) calls it cross-origin. `app.py` adds `CORSMiddleware` scoped to the
-`https://jessbodie.com` origin only (no `"*"`, no credentials — production-only; Vercel
-preview subdomains are deliberately excluded for now). `POST /warmup` forces the RAG lazy
+served from Vercel) calls it cross-origin. `app.py` adds `CORSMiddleware` with an
+**env-driven** explicit-origin allowlist (`ALLOWED_ORIGINS`, comma-separated; defaults to
+`https://jessbodie.com` when unset — no `"*"`, no credentials). Local dev (`localhost:3000`)
+and Vercel preview subdomains are allowed **per-environment via the env var**, not by code
+change (the earlier "production-only, previews deliberately excluded" stance was relaxed
+for the frontend build). `POST /warmup` forces the RAG lazy
 singletons (embedder + corpus index) to load early via one throwaway `search()` call, so
 the first real `search_guidance` dispatch doesn't eat the ONNX-model load latency; it's
 idempotent and its atomic success means container-awake + embedder + index all loaded.
@@ -219,8 +222,21 @@ deterministic filter in plants.py. Do not apply RAG to structured data.
 - Corpus + index are built offline by `scripts/build_rag_index.py` and shipped;
   there is no runtime index build (mirrors the CSV pattern).
 
-**Frontend (Next.js) is last.**
-A thin chat UI layer, added only after the backend and agent loop work.
+**Frontend (Next.js) — now starting.** The deterministic core, agent loop, and API
+are built, so the frontend (previously deferred) is the current workstream. The complete
+handoff set lives in `docs/`:
+- `docs/DESIGN_SPEC.md` — color/type/brand system + per-component specs (ported from the
+  jessbodie.com portfolio; sage accent, coral reserved for warnings/errors).
+- `docs/API_SAMPLES_FOR_DESIGN.md` — real `ChatResponse` payloads, advisory catalogue,
+  example conversation.
+- `docs/FRONTEND_INTEGRATION.md` — the build wiring: client-stateless transport (hold &
+  resend `messages`), seed-vs-continue lifecycle, `roof_sqft` round-trip, `/warmup`, env/
+  CORS/basePath, TypeScript types, and the design-state → API-condition mapping.
+- `docs/CLAUDE_DESIGN_BRIEF.md` — the brief handed to Claude Design.
+- `design/…/design_handoff_rain_garden_advisor/` — the Claude Design export (high-fidelity
+  HTML prototype, `tokens.scss`, screenshots, final photography + logo).
+Decided: **SCSS Modules** (not Tailwind); hybrid routing (landing = real indexable route
+at `/raingarden`, flow = client state); light theme only for v1 (tokens kept theme-able).
 
 ---
 
@@ -282,13 +298,15 @@ RAG artifacts (all shipped as package data, built offline — never at runtime):
 
 ## What is explicitly out of scope right now
 
-- Next.js or any frontend code
 - Precipitation charts and dashboard visualizations (V2 — see TODO.md)
-- Porting any logic to JavaScript
+- Porting any calculation logic to JavaScript (the deterministic core stays in Python;
+  the frontend calls the API and renders — it never recomputes)
 
 (The LLM agent loop, the FastAPI `POST /chat` endpoint, and the search_guidance
-RAG layer are now built — see the Architecture section. The frontend is still the
-last piece.)
+RAG layer are all built — see the Architecture section. The **Next.js frontend is now
+in scope and starting** — see "Frontend (Next.js) — now starting" above and the `docs/`
+handoff set. Note: frontend work is expected to happen in a separate repo/app; keep this
+Python repo's calculation core untouched by it.)
 
 ---
 

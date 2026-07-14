@@ -13,6 +13,38 @@ Reference this file in CLAUDE.md so Claude Code keeps it in context.
 
 ---
 
+## Frontend build — STARTING (2026-07-14)
+The Next.js frontend (previously deferred as "last") is now the active workstream.
+Handoff package is complete in `docs/`: `DESIGN_SPEC.md`, `API_SAMPLES_FOR_DESIGN.md`,
+`FRONTEND_INTEGRATION.md`, `CLAUDE_DESIGN_BRIEF.md`, plus the Claude Design export under
+`design/`. Decided: SCSS Modules (not Tailwind); hybrid routing (landing = real indexable
+route at `/raingarden`, flow = client state); light theme only for v1.
+
+**Pending during/after the frontend build:**
+- **Placeholder copy** — the landing page's **About Me bio** and **Credits & Sources**
+  list are PLACEHOLDER in the design; supply real copy AFTER the frontend is coded
+  (Credits & Sources is the home for the RAG guidance source citations). Consolidates
+  the earlier scattered "About page" / "Credits/Sources page" notes below.
+- **Canonical `check_viability` advisory copy** is still placeholder (spec §4.5) —
+  finalize during frontend work.
+
+## Implemented: Frontend-readiness backend tweaks (2026-07-14)
+Two small API-contract changes so the frontend builds against a stable surface. Full
+suite green (213 passed).
+- **CORS is now env-driven** (`app.py`): `ALLOWED_ORIGINS` (comma-separated) replaces the
+  hardcoded `["https://jessbodie.com"]`, defaulting to that origin when unset. Lets local
+  dev (`localhost:3000`) and Vercel previews be allowed per-environment without a code
+  change. **Action for deploy:** set `ALLOWED_ORIGINS` in each environment (Render prod,
+  local `.env`, any preview) — unset = production-only.
+- **Distinct address-error status** (`app.py` + `tools.py`): a geocode miss now returns
+  `status: "address_not_found"` (was `out_of_region` for both cases). `geocode_and_gate`
+  carries a `reason` field; `_stages` treats both rejections the same (Address =
+  in_progress). The frontend keys its two Address error screens off `status`, not brittle
+  `detail` string-matching. Tests: `test_gate_refuses_*` assert `reason`;
+  `test_address_not_found_marks_address_in_progress` added.
+
+---
+
 ## Implemented: Roof Catchment Area Estimation (Google Solar API)
 Implemented 2026-07-03 (branch `estimate-roofSA`). Verified live against the Solar
 API and offline via fixtures (191+ tests). The original feature spec is superseded by
@@ -351,8 +383,16 @@ Added: 2026-06-25
 **Evaluate if/when the 3:1 basin slope about the garden's internal side wall should surface as an advisory**
 
 **For list of plants, can we get and then include the dropped Scientific Name?**
+Design/frontend context (2026-07-14): the Claude Design plant table **dropped** the
+Scientific Name column (the API doesn't expose it). Restoring it means adding
+`scientific_name` to `tools.py` `_PLANT_COLUMNS` (confirm it exists in the plant CSV).
+Still open — a deliberate future decision, not pre-build work.
 
 **For list of plants, examine the "mosture use" detail and if we can translate to "Drought Tolerance" or something more intuitive**
+Design/frontend context (2026-07-14): the design + `FRONTEND_INTEGRATION.md` kept the
+column labeled **"Moisture Use"** (the real `moisture_use` field). Do NOT simply relabel
+it "Drought Tolerance" — that's a different (arguably inverse) quantity and would mislead.
+A true drought-tolerance column would need a new data field. Still open.
 
 ---
 

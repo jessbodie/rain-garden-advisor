@@ -43,11 +43,12 @@ companion** to the design handoff and the other docs:
   - Local dev typically points at `http://localhost:8000`.
 - **basePath**: the app is mounted at `/raingarden` under `jessbodie.com`. Set
   Next.js `basePath: '/raingarden'` (or a rewrite) so asset/link paths resolve.
-- **CORS**: the backend currently allows the origin **`https://jessbodie.com`
-  only** (`app.py` `CORSMiddleware`), methods `POST`, header `Content-Type`, no
-  credentials. **Implication:** local dev from `http://localhost:3000` and any
-  Vercel preview domain are **not** allowed yet. Before dev/preview works you must
-  add those origins to `allow_origins` in `app.py` (small backend change — §8).
+- **CORS**: **env-driven** (`app.py`). The backend reads `ALLOWED_ORIGINS`
+  (comma-separated), defaulting to `https://jessbodie.com` when unset; methods
+  `POST`, header `Content-Type`, no credentials. **To develop locally / on previews:**
+  set the origins in that environment, e.g.
+  `ALLOWED_ORIGINS=http://localhost:3000,https://jessbodie.com` — no code change
+  needed. (Unset = production-only.)
 - **Fonts**: Montserrat via `next/font/google`, weights `['400','500','600','700']`
   only (see `tokens.scss`).
 - **Tokens**: import `tokens.scss` (SCSS vars + `:root` custom properties) as-is.
@@ -179,7 +180,8 @@ type Results = {
   plants?: { interior: Plant[]; perimeter: Plant[]; reason?: string }; // may be empty → "no plants" state
 };
 
-type ChatStatus = 'awaiting_user' | 'complete' | 'out_of_region' | 'error';
+type ChatStatus =
+  | 'awaiting_user' | 'complete' | 'address_not_found' | 'out_of_region' | 'error';
 type Outcome = 'plan' | 'plan_not_recommended' | 'declined' | null;
 
 type ChatResponse = {
@@ -224,8 +226,8 @@ Every UI state in the design README, and the API condition that produces it:
 | Design state (screenshot) | API condition |
 |---|---|
 | Address — default (`02`) | Initial Address screen; no request yet |
-| Address — **invalid** (`03`) | Seed response `status: "out_of_region"`, `detail` = *"I couldn't find that address…"* (geocode failed) |
-| Address — **outside US** (`04`) | Seed response `status: "out_of_region"`, `detail` = *"…contiguous lower-48…"* (geocoded, state ∉ lower-48) |
+| Address — **invalid** (`03`) | Seed response **`status: "address_not_found"`**, `detail` = *"I couldn't find that address…"* (geocode failed) |
+| Address — **outside US** (`04`) | Seed response **`status: "out_of_region"`**, `detail` = *"…contiguous lower-48…"* (geocoded, state ∉ lower-48) |
 | Chat — first message (`05`) | Seed response `status: "awaiting_user"`, first `assistant_message` |
 | Chat — transcript (`06`) | Successive `awaiting_user` responses |
 | Chat — pending (`07`) | **Frontend-only**: the in-flight `POST /chat` before it resolves. "percolating…" is UI copy, not from the API |
@@ -236,31 +238,24 @@ Every UI state in the design README, and the API condition that produces it:
 | Results — **no plants** (`12`) | `results.plants.interior` **and** `.perimeter` empty (a `reason` may be present) |
 | Results — **not recommended** (`13`) | `status: "complete"`, `outcome: "plan_not_recommended"` (`results.recommended: false`); a `blocking` advisory in `results.advisories` |
 
-**⚠️ Invalid vs. outside-US:** the backend produces two *different `detail`
-messages* but labels **both** `status: "out_of_region"` (see [app.py:444],
-[tools.py:96-102]). So today you can only tell them apart by string-matching
-`detail`, which is brittle — and the **design has its own copy** for each
-(different from the backend's). **Recommended backend tweak (§8):** give the
-not-found case a distinct status/code so the frontend selects the right screen by a
-stable key. Until then: match on `detail`, or show the backend `detail` verbatim.
+**Invalid vs. outside-US (resolved 2026-07-14):** the two cases now carry **distinct
+statuses** — `address_not_found` (geocode miss) vs `out_of_region` (resolved but
+outside the lower-48). Key your two Address error screens off `status`; don't
+string-match `detail`. Both share the same stepper shape (Address = in_progress). The
+design has its own copy for each screen; use it, keyed off `status`.
 
 ---
 
 ## 8. Recommended backend changes (small)
 
-None are blockers, but each removes frontend friction:
-
-1. **CORS for dev/preview** — add `http://localhost:3000` (and any Vercel preview
-   origin) to `allow_origins` in `app.py`, or make it env-driven. *Required before
-   local development against the deployed API works.*
-2. **Distinct address-error discriminator** — return `status: "address_not_found"`
-   (or add an error `code`) for the geocode-miss case, so the two Address error
-   screens key off a stable signal instead of `detail` text (§7). Update
-   `_stages(..., "address_not_found", ...)` to treat it like `out_of_region`
-   (Address = in_progress).
-3. *(Optional)* If you still want **Scientific Name** in the plant table, add
+1. ✅ **DONE (2026-07-14) — CORS env-driven.** `app.py` reads `ALLOWED_ORIGINS`
+   (comma-separated), default `https://jessbodie.com`. *Action:* set it in each
+   environment (local `.env`, Render prod, previews) — see §2.
+2. ✅ **DONE (2026-07-14) — distinct address-error status.** Geocode miss →
+   `status: "address_not_found"`; outside-48 → `status: "out_of_region"` (§7).
+3. *(Optional, not done)* If you want **Scientific Name** in the plant table, add
    `scientific_name` to `tools.py` `_PLANT_COLUMNS` (the design dropped that column
-   and kept `moisture_use`, so this is only if you change your mind).
+   and kept `moisture_use`). Tracked in `TODO.md`.
 
 ---
 
