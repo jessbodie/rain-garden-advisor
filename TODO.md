@@ -350,6 +350,10 @@ Added: 2026-06-25
 
 **Evaluate if/when the 3:1 basin slope about the garden's internal side wall should surface as an advisory**
 
+**For list of plants, can we get and then include the dropped Scientific Name?**
+
+**For list of plants, examine the "mosture use" detail and if we can translate to "Drought Tolerance" or something more intuitive**
+
 ---
 
 ## Feature Requests
