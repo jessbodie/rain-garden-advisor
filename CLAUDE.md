@@ -3,6 +3,11 @@
 Read this file at the start of every session. Also read TODO.md before
 starting any new module.
 
+`README.md` is the portfolio-facing / developer-setup entry point (what it is, install,
+env, run, test, plus a "How AI was used" section). This file (CLAUDE.md) stays the
+authoritative source for architecture rationale — the README summarizes and links here,
+so keep them consistent when architecture changes.
+
 ---
 
 ## What this project is
