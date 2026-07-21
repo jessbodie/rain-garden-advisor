@@ -108,19 +108,28 @@ def garden_dimensions(area: float) -> dict[str, float]:
 def plant_counts(length: float, width: float, area: float) -> dict[str, float]:
     """Suggested plant counts for the interior and perimeter of the garden.
 
-    Each plant is allotted a ``PLANT_WIDTH_FT`` square. The interior is the area
-    inset by one plant-width on each side; the perimeter is the remainder. Uses
+    Each plant is allotted a ``PLANT_WIDTH_FT`` square. The perimeter is a ring
+    one plant deep around the edge, so the interior is the footprint inset by one
+    plant-width on *each* side — i.e. ``2 * PLANT_WIDTH_FT`` per dimension. Uses
     the unrounded ``length``/``width`` from :func:`garden_dimensions`. Counts are
     returned unrounded; round for display.
 
-    For very small gardens the notebook's formula yields a *negative* interior
-    area (e.g. a ~3 sq ft garden insets to below zero on each side); the notebook
-    leaves this unguarded. We keep the same formula but clamp the interior and
-    perimeter areas — and therefore the counts — at zero so neither can go
-    negative.
+    DIVERGENCE FROM THE NOTEBOOK (deliberate — see TODO.md, 2026-07-19). The
+    notebook (``DIY Rain Garden Calculator_20260624.yaml:1411``) insets by only
+    ONE plant-width per dimension, which models the perimeter ring as half a plant
+    deep and badly under-counts it: a 144 sq ft garden (8.5 x 17 ft, a ~51 ft
+    boundary needing ~38 plants to ring it once) came out with 18 perimeter plants.
+    The total is unaffected either way — interior + perimeter always sums to
+    ``area / plant_area``; only the split changes.
+
+    The zero-clamp is applied PER DIMENSION, not to the product. On a very small
+    garden both insets go negative and their product would come back *positive*
+    (a 3 sq ft garden yields +0.30 sq ft of phantom interior), so clamping the
+    product alone is unsound under this formula.
     """
     plant_area = PLANT_WIDTH_FT * PLANT_WIDTH_FT
-    interior_area = max(0.0, (length - PLANT_WIDTH_FT) * (width - PLANT_WIDTH_FT))
+    inset = 2 * PLANT_WIDTH_FT
+    interior_area = max(0.0, length - inset) * max(0.0, width - inset)
     outer_area = max(0.0, area - interior_area)
     return {
         "interior_area": interior_area,

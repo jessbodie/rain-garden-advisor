@@ -324,9 +324,25 @@ def test_split_ceiling_is_per_option():
     assert "split_ceiling" not in _opt_types(o8)
 
 
+# --- Two-zone floor fixtures: READ BEFORE CHANGING SIZING FACTORS -------------
+# The two tests below are SENSITIVE to sizing.SIZE_FACTORS_BY_DEPTH. They work by
+# choosing a catchment that drives the raw (unrounded) interior count into a narrow
+# target window, and the only knob reaching that window is
+# area = catchment * factor(soil, band). If a factor changes, these catchments stop
+# landing where the comments claim and the tests go silently vacuous or flip.
+#
+# To re-derive: the floor fires at raw interior < 1, which for the 1:2 footprint is
+# area < ~19.8 sq ft (interior = (L - 2*1.33) * (2L - 2*1.33), L = sqrt(area/2),
+# divided by 1.33^2). Interior hits zero at or below ~14.2 sq ft. Pick a catchment
+# so the target option's area lands in the window each test needs, then update both
+# the catchment and the derived numbers in that test's comment.
+
 def test_two_zone_floor_is_per_option():
-    # Sandy @ 60: 4" (area 11) and 6" (area 9) hold a center; 8" (area 5) does not.
-    result = dispatch("size_garden", {"catchment_sa": 60, "soil_type": "Sandy"})
+    # Sandy @ 150 -> areas 28 / 22 / 12 sq ft, raw interior 3.08 / 1.59 / 0.00.
+    # Chosen so the floor is ABSENT on 4" and 6" but PRESENT on 8": it straddles the
+    # ~19.8 sq ft firing point, which is the whole point of the test. A catchment
+    # under ~104 floors all three options and makes this assert nothing.
+    result = dispatch("size_garden", {"catchment_sa": 150, "soil_type": "Sandy"})
     o4, o6, o8 = result["sizing"]["options"]
     assert "two_zone_floor" not in _opt_types(o4)
     assert "two_zone_floor" not in _opt_types(o6)
@@ -335,9 +351,12 @@ def test_two_zone_floor_is_per_option():
 
 
 def test_two_zone_floor_gates_on_unrounded_count():
-    # Sandy @ 40, 4": raw interior count 0.899 rounds to a DISPLAYED 1, but the
-    # floor must still fire because the raw value is < 1.
-    result = dispatch("size_garden", {"catchment_sa": 40, "soil_type": "Sandy"})
+    # Sandy @ 100, 4" -> area 19 sq ft, raw interior count 0.836.
+    # The catchment is chosen for a NARROW window: raw interior must be >= 0.5 (so it
+    # display-rounds up to 1) and < 1 (so the floor still fires). That is areas
+    # ~17.2-19.8 sq ft, i.e. Sandy catchments ~91-104 only. Outside it the test no
+    # longer exercises the raw-vs-rounded distinction it exists to protect.
+    result = dispatch("size_garden", {"catchment_sa": 100, "soil_type": "Sandy"})
     o4 = result["sizing"]["options"][0]
     assert o4["interior_plants"] == 1                 # display-rounded up
     assert "two_zone_floor" in _opt_types(o4)         # raw < 1 still fires
@@ -363,8 +382,11 @@ def test_reduction_allowance_fires_only_when_a_ceiling_fires():
 
 
 def test_reduction_allowance_suppressed_when_a_floor_fires():
-    # Sandy @ 60: an option hits the floor, so the allowance is withheld even if a
-    # ceiling were present (defensive; the two conditions don't co-occur naturally).
+    # Sandy @ 60 -> areas 11 / 9 / 5 sq ft, all below the ~19.8 sq ft firing point, so
+    # every option floors. Only needs SOME option to floor (see the sizing-factor
+    # sensitivity note above), so it is the least brittle of the three.
+    # An option hits the floor, so the allowance is withheld even if a ceiling were
+    # present (defensive; the two conditions don't co-occur naturally).
     result = dispatch("size_garden", {"catchment_sa": 60, "soil_type": "Sandy"})
     assert not any(a["type"] == "reduction_allowance"
                    for a in result["sizing"]["advisories"])

@@ -31,7 +31,8 @@ Do NOT port any calculation logic to JavaScript.
 **Deterministic core — six clean modules, each independently testable:**
 - `src/rain_garden/sizing.py` — garden area (soil × depth-band factor), dimensions,
   plant counts ✅ (depth is a user tradeoff across three options, not area-derived —
-  see the depth-options note below)
+  see the depth-options note below; plant-count geometry has one deliberate notebook
+  divergence — see "Plant-count geometry" below)
 - `src/rain_garden/precipitation.py` — three weather scalars from Open-Meteo ✅
 - `src/rain_garden/geocode.py` — address → lat/lon via Nominatim ✅
 - `src/rain_garden/hardiness.py` — USDA hardiness zone via RapidAPI ✅
@@ -57,6 +58,23 @@ returns `{recommended, sizing:{options[], advisories[]}, advisories[], gallons_p
   perimeter planting). Deeper = smaller factor = more compact. Unknown soil → Clayey column.
 - `sizing.advisories[]` — depth-*invariant* sizing advisory: only the 30%-reduction
   allowance, and only when a ceiling fired and no floor did.
+
+**Plant-count geometry (`sizing.plant_counts`) — the ONE deliberate notebook divergence.** ✅
+Each plant gets a `PLANT_WIDTH_FT` (1.33 ft) square. The perimeter is a ring **one plant
+deep**, so the interior insets by `2 * PLANT_WIDTH_FT` per dimension — one plant-width on
+*each* side. The notebook (`:1411`) insets by only ONE plant-width per dimension, making the
+ring half a plant deep and badly under-counting it (a 144 sq ft garden — 8.5 × 17 ft, a ~51 ft
+boundary needing ~38 plants to ring once — reported 18 perimeter plants; it is now 34).
+Totals are unaffected either way (interior + perimeter always sums to `area / plant_area`);
+only the split moves. Interior legitimately exceeds perimeter above ~97 sq ft — the ring grows
+with perimeter (linear), the interior with area (quadratic) — so a perimeter-dominant small
+garden and an interior-dominant large one are both correct.
+Two things not to undo: the zero-clamp is applied **per dimension, not to the product**
+(below ~14 sq ft both insets go negative and their product returns a *positive* phantom
+interior), and the `test_tools.py` two-zone-floor fixtures target narrow raw-interior windows
+that are sensitive to `SIZE_FACTORS_BY_DEPTH` (re-derivation recipe is in a comment block
+above those tests). Band depth is fixed at one plant for now; scaling it with area is a
+deferral in TODO.md.
 - top-level `advisories[]` — the merged site advisories. The three **viability blockers**
   (`foundation_setback`, `slope`, `low_drainage`) plus the soft `clayey_unverified` note now
   come from `check_viability` (see below); the depth-invariant site notes (`utilities`,
@@ -251,6 +269,13 @@ The notebook export at `notebooks/DIY Rain Garden Calculator_20260624.yaml`
 is the authoritative reference for all ported logic. When in doubt, match
 the notebook's behavior exactly (including edge cases), then note any defects
 in TODO.md.
+
+**Known exception — exactly one, as of 2026-07-19.** The plant-count inset in
+`sizing.plant_counts` intentionally does NOT match the notebook (`:1411`); see
+"Plant-count geometry" above and the divergence entry in TODO.md. The notebook produced a
+visibly wrong perimeter count, so it was corrected rather than mirrored. If you find
+another place where the notebook looks wrong, the default is still to match it and file
+the defect — divergences get discussed and recorded here, not made quietly.
 
 ---
 

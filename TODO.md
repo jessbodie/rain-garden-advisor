@@ -4,6 +4,15 @@ SUMMARY
 
 
 IN DETAIL
+UI POLISH!!!
+- UI of chat, esp the scroll
+- Logo, design of top logo/bar
+- Design of footer
+- change the sample address in the input box to enter an address
+- Chat UI: weird double asterisks around questions
+- Chat UI "still percolating, please be patient..." right before results takes VERY long
+- Chat LLM, suggested doing perc test
+- Make top RGA logo go home
 
 # Rain Garden Advisor — TODO
 
@@ -88,7 +97,43 @@ should probably return a warning rather than silently produce edge-case counts.
 Partly addressed 2026-07-04: an option whose interior can't hold one plant now fires
 the per-option `two_zone_floor` advisory (single-zone perimeter planting). A hard
 minimum-viable-size check on the whole garden is still unaddressed.
+Updated 2026-07-19: the corrected inset (see the divergence entry below) raised the
+`two_zone_floor` trip point from gardens under ~8 sq ft to under ~20 sq ft, which brings
+it closer to the ~9 sq ft geometry-table minimum this entry asks for. The threshold
+itself is unchanged (raw interior < 1) — only the geometry feeding it. A hard
+minimum-viable-size check is still the open item.
 Added: 2026-06-25
+
+**DIVERGENCE FROM THE NOTEBOOK — plant-count inset (resolved, recorded)**
+The notebook (`DIY Rain Garden Calculator_20260624.yaml:1411`) insets the interior by
+ONE plant-width per dimension, which models the perimeter ring as half a plant deep and
+badly under-counts it. A live run surfaced it: a 144 sq ft garden (8.5 x 17 ft, a ~51 ft
+boundary needing ~38 plants to ring it once) reported 18 perimeter plants.
+`sizing.plant_counts` now insets by `2 * PLANT_WIDTH_FT` — one plant-width on each side.
+Totals are unaffected (interior + perimeter always sums to `area / plant_area`); only the
+split changes: for that garden, 63/18 became 47/34.
+Two consequences worth knowing:
+- The zero-clamp had to move from the product to each dimension. Below ~14 sq ft both
+  insets go negative and their product comes back *positive* (3 sq ft yielded a phantom
+  +0.30 sq ft interior). `test_plant_counts_small_garden_is_guarded` is the regression guard.
+- `tests/test_tools.py` two-zone-floor fixtures were re-derived (Sandy @ 150 and @ 100).
+  They target narrow raw-interior windows and are sensitive to `SIZE_FACTORS_BY_DEPTH`;
+  the re-derivation recipe is in a comment block above those tests.
+Note this is the one place the notebook is deliberately NOT the oracle.
+Added: 2026-07-19
+
+**Perimeter band is fixed at one plant deep — should scale with area**
+The perimeter ring is always exactly one plant deep, regardless of garden size (the
+hardcoded `2 * PLANT_WIDTH_FT` inset in `sizing.plant_counts`). Kept simple on purpose.
+On a large garden a single-plant edge is a thin transition between the wet center and the
+dry rim, and a two-plant band would better reflect the actual moisture gradient — the
+crossover worth investigating is somewhere around 200-300 sq ft.
+Implementation sketch: replace the hardcoded `2 *` with a `band_depth` chosen from `area`
+(inset becomes `2 * band_depth * PLANT_WIDTH_FT`). Affects large gardens only — small ones
+already floor out — so it shifts the interior/perimeter split at the top of the range and
+would need new test oracles there. Needs a source for the threshold before implementing;
+right now it would be a guess.
+Added: 2026-07-19
 
 **Agent-layer and FastAPI tests — partial gaps remain**
 Largely addressed. `tests/test_viability_wiring.py` and `tests/test_roof_estimate.py`

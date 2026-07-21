@@ -62,24 +62,45 @@ def test_garden_dimensions():
     assert dims["width"] == pytest.approx(2 * math.sqrt(21))
 
 
-# --- Plant counts (unchanged formula; notebook-verified oracles) -------------
+# --- Plant counts -------------------------------------------------------------
+# These oracles DIVERGE from the notebook by design: the perimeter is a ring one
+# plant deep, so the interior insets by 2 * PLANT_WIDTH_FT per dimension, not one.
+# See plant_counts' docstring and TODO.md (2026-07-19).
 
 def test_plant_counts_example():
+    # 42 sq ft -> 4.58 x 9.17 ft. Interior 1.92 x 6.51 = 12.5 sq ft.
     dims = sizing.garden_dimensions(42.0)
     counts = sizing.plant_counts(dims["length"], dims["width"], 42.0)
-    assert counts["interior_area"] == pytest.approx(25.5, abs=0.1)
-    assert round(counts["interior_count"]) == 14
-    assert counts["outer_area"] == pytest.approx(16.5, abs=0.1)
-    assert round(counts["outer_count"]) == 9
+    assert counts["interior_area"] == pytest.approx(12.5, abs=0.1)
+    assert round(counts["interior_count"]) == 7
+    assert counts["outer_area"] == pytest.approx(29.5, abs=0.1)
+    assert round(counts["outer_count"]) == 17
+
+
+def test_plant_counts_totals_reconcile():
+    # Structural invariant, independent of how the interior/perimeter line falls:
+    # every plant is either interior or perimeter, so the two must sum to the
+    # whole footprint. Holds at any size, including the clamped ones.
+    for area in (1.0, 3.0, 14.0, 42.0, 144.0, 900.0):
+        dims = sizing.garden_dimensions(area)
+        counts = sizing.plant_counts(dims["length"], dims["width"], area)
+        assert counts["interior_area"] + counts["outer_area"] == pytest.approx(area)
+        total = counts["interior_count"] + counts["outer_count"]
+        assert total == pytest.approx(area / (sizing.PLANT_WIDTH_FT ** 2))
 
 
 def test_plant_counts_small_garden_is_guarded():
-    # A ~3 sq ft garden would inset to a negative interior; the guard clamps to 0.
-    dims = sizing.garden_dimensions(3.0)
-    counts = sizing.plant_counts(dims["length"], dims["width"], 3.0)
-    assert counts["interior_area"] == 0.0
-    assert counts["interior_count"] >= 0
-    assert counts["outer_count"] >= 0
+    # REGRESSION GUARD for the per-dimension clamp. Below ~14 sq ft BOTH insets go
+    # negative, and clamping only their product would let two negatives multiply
+    # into a positive interior (3 sq ft -> a phantom +0.30 sq ft). Clamping each
+    # dimension first is what keeps these at zero; revert to a product-level clamp
+    # and this test fails.
+    for area in (1.0, 3.0):
+        dims = sizing.garden_dimensions(area)
+        counts = sizing.plant_counts(dims["length"], dims["width"], area)
+        assert counts["interior_area"] == 0.0
+        assert counts["interior_count"] == 0.0
+        assert counts["outer_count"] >= 0
 
 
 # --- parse_perc_rate (unchanged) ---------------------------------------------
