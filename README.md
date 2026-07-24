@@ -117,8 +117,14 @@ the frontend locally.
 ### Run the API
 
 ```bash
-uvicorn app:app --reload
+uvicorn app:app --reload            # requires the venv to be activated (see above)
+
+# or, without activating — call the venv's uvicorn directly (shell-agnostic):
+.venv/Scripts/uvicorn app:app --reload   # Windows;  .venv/bin/uvicorn on macOS/Linux
 ```
+
+Serves on `http://localhost:8000` — the URL the frontend's `.env.local` points at for
+local development.
 
 - `POST /chat` — the single conversational endpoint (client-stateless; send back the
   full `messages` transcript each turn).

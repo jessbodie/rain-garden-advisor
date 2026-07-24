@@ -463,9 +463,12 @@ def chat(req: ChatRequest):
                 stages=_stages([], status, None),
             )
         # Resolve the roof estimate once, up front (reusing the geocoded lat/lon), so it
-        # is available before the catchment question. Bounded by a ~5s timeout; None on
-        # any failure. Only *availability* rides in the seed; the digit stays out of band.
-        estimate = estimate_roof_area(location["lat"], location["lon"])
+        # is available before the catchment question. Capped at 3s: this sits on the
+        # address-submit critical path (geocode + roof + first model turn all block the
+        # response), so a slow/no-coverage Solar call must not stall submit — a timeout
+        # yields None, identical to any other miss. Only *availability* rides in the seed;
+        # the digit stays out of band.
+        estimate = estimate_roof_area(location["lat"], location["lon"], timeout_s=3.0)
         roof_sqft = estimate["roof_sqft"] if estimate else None
         messages = [{"role": "user", "content": build_seed(location, estimate)}]
 

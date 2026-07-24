@@ -4,15 +4,12 @@ SUMMARY
 
 
 IN DETAIL
-UI POLISH!!!
-- UI of chat, esp the scroll
 - Logo, design of top logo/bar
 - Design of footer
-- change the sample address in the input box to enter an address
-- Chat UI: weird double asterisks around questions
 - Chat UI "still percolating, please be patient..." right before results takes VERY long
 - Chat LLM, suggested doing perc test
-- Make top RGA logo go home
+- Home copy for photo
+- Home --  a lot
 
 # Rain Garden Advisor — TODO
 
